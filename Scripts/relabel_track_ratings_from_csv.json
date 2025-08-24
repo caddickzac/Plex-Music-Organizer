@@ -1,0 +1,5 @@
+{
+  "action": "relabel: track ratings",
+  "expected_columns": ["Track_ID", "User_Rating"],
+  "expected_values": ["e.g., 12345", "a single integer between: 0-10"]
+}

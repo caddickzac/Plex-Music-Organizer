@@ -1,0 +1,5 @@
+{
+  "action": "relabel: track artist",
+  "expected_columns": ["Track_ID", "Track_Artist"],
+  "expected_values": ["e.g., 12345", "e.g., The Beatles"]
+}
