@@ -403,54 +403,19 @@ def ui_update_tab(cfg: AppConfig):
             except Exception as e:
                 st.error(f"Execution error: {e}")
 
-def ui_registry_tab():
-    st.subheader("Discovered actions → scripts")
-    # Show everything in the registry (including export); pass signature to auto-refresh
-    registry = discover_scripts(include_exports=True, _sig=scripts_signature())
-    refresh = st.button("↻ Refresh list")
-    if refresh:
-        discover_scripts.clear()
-        st.rerun()
-
-    if registry:
-        reg_df = pd.DataFrame([
-            {
-                "action": info.action,
-                "command": " ".join(info.cmd),
-                "path": info.path,
-                "expected_columns": ", ".join(info.schema),
-                "expected_values": ", ".join(info.expected_values),
-            }
-            for info in registry.values()
-        ])
-        st.dataframe(reg_df)
-    else:
-        st.caption("No scripts discovered yet. Add .py files to the `Scripts/` folder.")
-
-    st.subheader("Sidecar metadata format (.json next to .py)")
-    st.code(
-        """{
-  "action": "add: artist genres",
-  "expected_columns": ["Artist_ID", "Artist_Genres"],
-  "expected_values": ["12345", "Rock; Indie; Alt"]
-}""",
-        language="json",
-    )
 
 # ---------------------------
 # Main
 # ---------------------------
 def main():
     st.title(APP_TITLE)
-    st.caption("Configure Plex, export current metadata, and call your existing update scripts safely.")
+    st.caption("Export music metadata, update metadata, and add to playlists and collections.")
     cfg = ui_sidebar_config()
-    tab1, tab2, tab3 = st.tabs(["Export", "Update from CSV", "Script Registry"])
+    tab1, tab2 = st.tabs(["Export", "Update from CSV"])
     with tab1:
         ui_export_tab(cfg)
     with tab2:
         ui_update_tab(cfg)
-    with tab3:
-        ui_registry_tab()
 
 if __name__ == "__main__":
     main()
