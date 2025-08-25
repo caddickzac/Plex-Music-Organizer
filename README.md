@@ -18,15 +18,23 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
 
 ---
 
-## Quick Start
 
-### 1) Install
+## Create a batch file to open program 
 
 ```bash
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
+@echo off
+REM set working directory
+cd [working directory]
 
-pip install -U streamlit pandas plexapi python-dotenv
+REM Activate the virtual environment
+call venv/Scripts/activate
+
+REM Run the Streamlit app using the Python installation in the virtual environment
+streamlit run Plex_Streamlit_App.py
+
+REM Pause command to keep the terminal open after the script runs (optional)
+pause
+```
+3. Save and close text document.
+4. Change file type from ".txt" to ".bat"
+5. Now you can run the batch file as a shortcut icon and avoid having to enter any code in the command line!
