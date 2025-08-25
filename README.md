@@ -18,7 +18,6 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
 
 ---
 
-## Quick Start
 
 ## Create a batch file to open program 
 
