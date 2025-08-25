@@ -1,21 +1,21 @@
 # Plex Music Library — Organizer (Streamlit)
 
-A simple Streamlit app to **export** your Plex music metadata and **apply bulk updates from CSV** by calling your own Python scripts in the `Scripts/` folder.
+A simple Streamlit app to **export** your Plex music metadata and **apply bulk updates from CSV** files.
 
 ---
 
 ## Features
 
-- **One-click Export** (via `Scripts/export_library_metadata.py`) with live logs and a download button.
+- **One-click Export** (via `Scripts/export_library_metadata.py`) with live status logs.
 - **Update from CSV**:
-  - Auto-discovers update scripts in `./Scripts` (uses optional sidecar JSON for labels & hints).
-  - Passes credentials via environment and the CSV path via JSON on **stdin**.
-  - Shows **expected columns** and **expected values** (from sidecar JSON) in a single two-column table.
-  - Friendly success messages (parses `Done. Edited=N Skipped=M` from script output).
+  - Add artist genre information for each track.
+  - Bulk relabel: album titles, album genres, disc numbers, track artist, track numbers, track ratings, and track title.
+  - Create music collections (track, album, or artist level). 
+  - Create music playlists. 
+  - Shows **expected columns** and **expected values** for ease of use. 
 - **Configuration**:
   - Reads `./config.txt` to prefill **Plex URL** and **Plex Token** (quoted or plain values).
-- **Windows-safe Unicode**: child scripts run with UTF-8 so emoji/logs don’t crash.
-
+    
 ---
 
 
