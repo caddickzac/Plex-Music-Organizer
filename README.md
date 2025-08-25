@@ -19,7 +19,9 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
 ---
 
 
-## Create a batch file to open program 
+## Create a batch file to run program
+1. Create text document on desktop
+2. Enter code below, changing "[working directory]" to your local directory where the streamlit app is saved. 
 
 ```bash
 @echo off
