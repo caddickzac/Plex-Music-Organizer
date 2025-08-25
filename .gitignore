@@ -1,5 +1,6 @@
 # --- Secrets / local config ---
 config.txt
+Plex_Streamlit_App.bat
 .env
 .env.*
 
@@ -28,3 +29,4 @@ ENV/
 # --- OS junk ---
 .DS_Store
 Thumbs.db
+config.txt
