@@ -60,7 +60,7 @@ pause
 
 ## How to Use
 1. Begin by exporting your Plex music libraries metadata to a csv file. (It is recommended that you save a copy of the file for restoring any unwanted changes.)
-2. Make the desired edits a copy of the exported csv file. (Note: examine "Expected CSV schema & values" tab for information on input variables and formatting. Playlist and collection scripts need a new column variable column added to the exported csv file.)
+2. Make the desired edits to a copy of the exported csv file. (Note: examine "Expected CSV schema & values" tab for information on input variables and formatting. Playlist and collection scripts need a new column variable column added to the exported csv file.)
 3. Upload csv file within "Update from CSV" tab after choosing your desired action and run script. 
 
 ## Exported File Data Dictionary 
