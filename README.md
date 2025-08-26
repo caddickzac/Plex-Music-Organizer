@@ -5,7 +5,6 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
 ---
 
 ## Features
-
 - **One-click Export** (via `Scripts/export_library_metadata.py`) with live status logs.
 - **Update from CSV**:
   - Add artist genre information for each track.
@@ -22,20 +21,18 @@ Plex Token: abcd1234...
 
 ```
 
-
 ## Requirements
 - Python 3.10+
-- pip install -r requirements.txt
-(dependencies: streamlit, plexapi, pandas)
+- pip install -r requirements.txt (dependencies: streamlit, plexapi, pandas)
 
 ## Plex API & URL Setup Guide
-1. Find your Plex API key
-- Sign in to your Plex account in Plex Web App
-- Browse to a library item and view the XML for it
-- Look in the URL and find the token as the X-Plex-Token value
-3. Find your Plex URL:
-- Plex Settings -> Remote Access
-- Find private URL
+- Find your Plex API key
+1. Sign in to your Plex account in Plex Web App
+2. Browse to a library item and view the XML for it
+3. Look in the URL and find the token as the X-Plex-Token value
+- Find your Plex URL:
+1. Plex Settings -> Remote Access
+2. Find private URL
 
 ## Create a batch file to run program (optional)
 1. Create text document on desktop
