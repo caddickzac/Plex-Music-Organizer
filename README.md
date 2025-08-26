@@ -58,6 +58,14 @@ pause
 4. Change file type from ".txt" to ".bat"
 5. Now you can run the batch file as a shortcut icon and avoid having to enter any code in the command line!
 
+## How to Use
+1. Begin by exporting your Plex music libraries metadata to a csv file. (It is recommended that you save a copy of the file for restoring any unwanted changes.)
+2. Make the desired edits a copy of the exported csv file. (Note: examine "Expected CSV schema & values" tab for information on input variables and formatting. Playlist and collection scripts need a new column variable column added to the exported csv file.)
+3. Upload csv file within "Update from CSV" tab after choosing your desired action and run script. 
+
+## Exported File Data Dictionary 
+- Information on the exported metadata variables can be found in "Plex_Organizer_Data_Dictionary" file.  
+
 ## Troubleshooting
 - “Must include items to add when creating new playlist.”
 Your CSV produced no valid track objects. Check:
