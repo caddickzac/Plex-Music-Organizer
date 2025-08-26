@@ -27,12 +27,14 @@ Plex Token: abcd1234...
 
 ## Plex API & URL Setup Guide
 - Find your Plex API key
--- 1. Sign in to your Plex account in Plex Web App
--- 2. Browse to a library item and view the XML for it
--- 3. Look in the URL and find the token as the X-Plex-Token value
+1. Sign in to your Plex account in Plex Web App
+2. Browse to a library item and view the XML for it
+3. Look in the URL and find the token as the X-Plex-Token value
+
+   
 - Find your Plex URL:
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 1. Plex Settings -> Remote Access
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 2. Find private URL
+1. Plex Settings -> Remote Access
+2. Find private URL
 
 ## Create a batch file to run program (optional)
 1. Create text document on desktop
