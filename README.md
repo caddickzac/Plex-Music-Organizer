@@ -17,13 +17,11 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
   - Reads `./config.txt` to prefill **Plex URL** and **Plex Token** (quoted or plain values).
   - Example:
 ```bash
-Plex URL: "http://192.168.1.115:32400"
+Plex URL: "http://xxx.xxx.x.xxx:xxxxx"
 Plex Token: abcd1234...
 
 ```
-Plex URL: "http://xxx.xxx.x.xxx:xxxxx"
-Plex Token: abcd1234...
----
+
 
 ## Requirements
 - Python 3.10+
