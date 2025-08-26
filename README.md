@@ -7,11 +7,11 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
 ## Features
 - **One-click Export** (via `Scripts/export_library_metadata.py`) with live status logs.
 - **Update from CSV**:
-  - Add artist genre information for each track.
-  - Bulk relabel: album titles, album genres, disc numbers, track artist, track numbers, track ratings, and track title.
+  - Add artist-genre information for each track.
+  - Bulk relabel album titles, album genres, disc numbers, track artist, track numbers, track ratings, and track title.
   - Create music collections (track, album, or artist level). 
   - Create music playlists. 
-  - Shows **expected columns** and **expected values** for ease of use. 
+  - Details **expected columns** and **expected values** for ease of use. 
 - **Configuration**:
   - Reads `./config.txt` to prefill **Plex URL** and **Plex Token** (quoted or plain values).
   - Example:
@@ -27,16 +27,15 @@ Plex Token: abcd1234...
 
 ## Plex API & URL Setup Guide
 **Find your Plex API key**
-1. Sign in to your Plex account in Plex Web App
-2. Browse to a library item and view the XML for it
-3. Look in the URL and find the token as the X-Plex-Token value
+1. Sign in to the Plex Web App
+2. Browse to any library item and open its XML view
+3. In the address bar, copy the value of X-Plex-Token
 
-   
 **Find your Plex URL:**
-1. Plex Settings -> Remote Access
-2. Find private URL
+1. Go to Settings -> Remote Access in the Plex Web App
+2. Copy the Local (private) URL
 
-## Create a batch file to run program (optional)
+## Create a batch file to run the program (optional)
 1. Create text document on desktop
 2. Enter code below, changing "[working directory]" to your local directory where the streamlit app is saved. 
 
@@ -59,18 +58,19 @@ pause
 5. Now you can run the batch file as a shortcut icon and avoid having to enter any code in the command line!
 
 ## How to Use
-1. Begin by exporting your Plex music libraries metadata to a csv file. (It is recommended that you save a copy of the file for restoring any unwanted changes.)
-2. Make the desired edits a copy of the exported csv file. (Note: examine "Expected CSV schema & values" tab for information on input variables and formatting. Playlist and collection scripts need a new column variable column added to the exported csv file.)
-3. Upload csv file within "Update from CSV" tab after choosing your desired action and run script. 
+1. Export your Plex music library’s metadata to a CSV file. (Tip: Save a copy of the exported file so you can restore any unwanted changes.)
+2. Make edits to a copy of the exported CSV. See the “Expected CSV schema & values” section in the app for input fields and formats.
+Note: Playlist and collection scripts require adding new columns to the exported CSV (e.g., Add_to_playlist, Add_to_album_collection, Add_to_artist_collection, Add_to_track_collection).
+3. In the Update from CSV tab, upload your edited CSV, choose an action, and run the script. 
 
 ## Exported File Data Dictionary 
-- Information on the exported metadata variables can be found in "Plex_Organizer_Data_Dictionary" file.  
+See the **Plex_Organizer_Data_Dictionary** file for descriptions of the exported metadata fields.
 
 ## Troubleshooting
-- “Must include items to add when creating new playlist.”
+- Error: “Must include items to add when creating new playlist.”
 Your CSV produced no valid track objects. Check:
   - Track_ID values are integers and exist on your server.
   - The playlist column is named exactly as expected (e.g., Add_to_playlist).
-  - Commas separate multiple names (no semicolons or pipes).
+  - Multiple names are comma-separated (no semicolons or pipes).
 - Note: Bulk writes can be destructive. Always export first. Test with 3–5 rows before running a big CSV.
 
