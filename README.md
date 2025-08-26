@@ -1,4 +1,4 @@
-# Plex Music Library — Organizer (Streamlit)
+# Plex Music Library Organizer (Streamlit App)
 
 A simple Streamlit app to **export** your Plex music metadata and **apply bulk updates from CSV** files.
 
