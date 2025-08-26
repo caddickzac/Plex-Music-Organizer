@@ -61,8 +61,8 @@ pause
 ## Troubleshooting
 - “Must include items to add when creating new playlist.”
 Your CSV produced no valid track objects. Check:
--- Track_ID values are integers and exist on your server.
--- The playlist column is named exactly as expected (e.g., Add_to_playlist).
--- Commas separate multiple names (no semicolons or pipes).
+  - Track_ID values are integers and exist on your server.
+  - The playlist column is named exactly as expected (e.g., Add_to_playlist).
+  - Commas separate multiple names (no semicolons or pipes).
 - Note: Bulk writes can be destructive. Always export first. Test with 3–5 rows before running a big CSV.
 
