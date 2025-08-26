@@ -26,7 +26,7 @@ Plex Token: abcd1234...
 ## Requirements
 - Python 3.10+
 - pip install -r requirements.txt
-(Typical dependencies: streamlit, plexapi, pandas, etc)
+(dependencies: streamlit, plexapi, pandas)
 
 ## Plex API & URL Setup Guide
 1. Find your Plex API key
