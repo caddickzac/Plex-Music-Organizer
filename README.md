@@ -21,6 +21,10 @@ Plex Token: abcd1234...
 
 ```
 
+## Screenshots of App
+![View 1](App%20Screenshots/View%201.png?raw=true)
+![View 2](App%20Screenshots/View%202.png?raw=true)
+
 ## Requirements
 - Python 3.10+
 - pip install -r requirements.txt (dependencies: streamlit, plexapi, pandas)
