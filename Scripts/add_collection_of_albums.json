@@ -1,0 +1,5 @@
+{
+  "action": "add: collection of albums",
+  "expected_columns": ["Track_ID", "Add_to_album_collection"],
+  "expected_values": ["e.g., 12345", "e.g., Pop Albums"]
+}
