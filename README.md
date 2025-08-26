@@ -15,11 +15,31 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
   - Shows **expected columns** and **expected values** for ease of use. 
 - **Configuration**:
   - Reads `./config.txt` to prefill **Plex URL** and **Plex Token** (quoted or plain values).
-    
+  - Example:
+```bash
+Plex URL: "http://192.168.1.115:32400"
+Plex Token: abcd1234...
+
+```
+Plex URL: "http://xxx.xxx.x.xxx:xxxxx"
+Plex Token: abcd1234...
 ---
 
+## Requirements
+- Python 3.10+
+- pip install -r requirements.txt
+(Typical dependencies: streamlit, plexapi, pandas, etc)
 
-## Create a batch file to run program
+## Plex API & URL Setup Guide
+1. Find your Plex API key
+- Sign in to your Plex account in Plex Web App
+- Browse to a library item and view the XML for it
+- Look in the URL and find the token as the X-Plex-Token value
+3. Find your Plex URL:
+- Plex Settings -> Remote Access
+- Find private URL
+
+## Create a batch file to run program (optional)
 1. Create text document on desktop
 2. Enter code below, changing "[working directory]" to your local directory where the streamlit app is saved. 
 
@@ -40,3 +60,12 @@ pause
 3. Save and close text document.
 4. Change file type from ".txt" to ".bat"
 5. Now you can run the batch file as a shortcut icon and avoid having to enter any code in the command line!
+
+## Troubleshooting
+- “Must include items to add when creating new playlist.”
+Your CSV produced no valid track objects. Check:
+-- Track_ID values are integers and exist on your server.
+-- The playlist column is named exactly as expected (e.g., Add_to_playlist).
+-- Commas separate multiple names (no semicolons or pipes).
+- Note: Bulk writes can be destructive. Always export first. Test with 3–5 rows before running a big CSV.
+
