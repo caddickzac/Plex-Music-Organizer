@@ -78,7 +78,7 @@ header = [
     "Date", "Date_Cleaned", "Bitrate", "Duration",
     "Track #", "Disc #", "File Type", "File Size (MB)",
     "Date Created", "Date Modified",
-    "Artist_Collections", "Album_Collections", "Mood",
+    "Artist_Collections", "Album_Collections", "Track_Collections", "Mood",
     "Playlists", "User_Rating", "Play_Count", "Track_Popularity", "Last_Played", "Labels", "Lyrics"
 ]
 
@@ -165,9 +165,10 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
                             date_created = getattr(track, "addedAt", "")
                             date_modified = getattr(track, "updatedAt", "")
 
-                            # Moods / labels
-                            moods  = _safe_join(getattr(track, "moods", None))
-                            labels = _safe_join(getattr(track, "labels", None))
+                            # Moods / labels / collections
+                            moods               = _safe_join(getattr(track, "moods", None))
+                            labels              = _safe_join(getattr(track, "labels", None))
+                            track_collections   = _safe_join(getattr(track, "collections", None))  # NEW
 
                             # Playlists (by file path)
                             playlists = ", ".join(sorted(track_to_playlists[file_path])) if file_path in track_to_playlists else ""
@@ -175,7 +176,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
                             # User stats
                             user_rating    = getattr(track, "userRating", "") or ""
                             play_count     = getattr(track, "viewCount", 0) or 0
-                            rating_count   = getattr(track, "ratingCount", 0) or 0  # NEW → Track_Popularity
+                            rating_count   = getattr(track, "ratingCount", 0) or 0  # Track_Popularity
                             last_played    = getattr(track, "lastViewedAt", "") or ""
 
                             # Disc/track numbers
@@ -189,7 +190,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
                                 date_str, date_cleaned, bitrate, duration_cleaned,
                                 track_num, disc_num, file_type, file_size_mb,
                                 date_created, date_modified,
-                                artist_collections, album_collections, moods,
+                                artist_collections, album_collections, track_collections, moods,
                                 playlists, user_rating, play_count, int(rating_count), last_played, labels, getattr(track, "lyrics", "") or ""
                             ]
                             writer.writerow(row)
