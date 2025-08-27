@@ -10,7 +10,7 @@ Artist_ID,Plex artist ratingKey.
 Track_Genres,Comma-separated genre tags attached to the track.
 Album_Genres,Comma-separated genre tags attached to the album.
 Artist_Genres,Comma-separated genre tags attached to the artist.
-Date,Original release date reported by Plex (raw).
+Date,Original release date reported by Plex (raw). Also accepts input as YYYY-MM-DD (also parses common variants like YYYY/MM/DD or MM/DD/YYYY) and epoch seconds. 
 Date_Cleaned,Normalized release date (YYYY).
 Bitrate,Audio bitrate in kbps (approximate).
 Duration,Track duration in seconds.
@@ -18,7 +18,7 @@ Track #,Track number within its disc.
 Disc #,Disc number within the album.
 File Type,"Container/codec extension (e.g., mp3, flac, m4a)."
 File Size (MB),File size in megabytes.
-Date Created,Filesystem creation time of the media file (if available).
+Date Created,Filesystem creation time of the media file (if available); Also accepts input as YYYY-MM-DD (also parses common variants like YYYY/MM/DD or MM/DD/YYYY) and epoch seconds. 
 Date Modified,Filesystem last modified time of the media file (if available).
 Artist_Collections,Comma-separated Plex collections applied at the artist level.
 Album_Collections,Comma-separated Plex collections applied at the album level.

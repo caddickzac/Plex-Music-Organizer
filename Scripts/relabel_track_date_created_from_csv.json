@@ -1,0 +1,5 @@
+{
+  "action": "relabel: track date created",
+  "expected_columns": ["Track_ID", "Date Created"],
+  "expected_values": ["12345", "YYYY-MM-DD (or epoch seconds)"]
+}
