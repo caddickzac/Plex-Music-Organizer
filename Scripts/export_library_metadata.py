@@ -6,8 +6,12 @@ Reads Plex credentials from environment:
   PLEX_BASEURL (preferred) or PLEX_URL
   PLEX_TOKEN   (preferred) or PLEX_API_TOKEN
 
-Writes CSV to:
-  OUTPUT_CSV (if set) else "plex_music_exported_details.csv"
+Writes per-track CSV to:
+  OUTPUT_CSV (if set) else "YYYY_MM_DD plex_music_exported_details.csv"
+
+Also writes album-level summary CSV (R-inspired):
+  "YYYY_MM_DD Artist_Album_Info.csv"
+  (in the same directory as OUTPUT_CSV)
 """
 
 import os
@@ -15,6 +19,7 @@ import sys
 import csv
 from collections import defaultdict
 from plexapi.server import PlexServer
+from datetime import datetime
 
 # --- Console encoding safety (Windows) ---
 try:
@@ -26,7 +31,10 @@ except Exception:
 # --- Config from environment ---
 PLEX_BASEURL = os.environ.get("PLEX_BASEURL") or os.environ.get("PLEX_URL")
 PLEX_TOKEN   = os.environ.get("PLEX_TOKEN")   or os.environ.get("PLEX_API_TOKEN")
-OUTPUT_CSV   = os.environ.get("OUTPUT_CSV", "plex_music_exported_details.csv")
+
+_date_prefix = datetime.now().strftime("%Y_%m_%d")
+_default_name = f"{_date_prefix} plex_music_exported_details.csv"
+OUTPUT_CSV   = os.environ.get("OUTPUT_CSV") or _default_name
 
 if not PLEX_BASEURL or not PLEX_TOKEN:
     sys.stderr.write("ERROR: Missing PLEX_BASEURL/PLEX_TOKEN (or PLEX_URL/PLEX_API_TOKEN).\n")
@@ -104,6 +112,59 @@ def _track_genres_from_xml(track):
         except Exception:
             return ""
 
+def _split_csvish(s: str):
+    """
+    Split strings that look like "a, b, c" into ["a","b","c"].
+    Keeps only non-empty trimmed items.
+    """
+    if not s:
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+def _sorted_unique_join(items):
+    """
+    Join unique items (strings), sorted.
+    Returns "" if nothing (after stripping empties).
+    """
+    cleaned = sorted({str(x).strip() for x in items if str(x).strip()})
+    return ", ".join(cleaned) if cleaned else ""
+
+def _try_float(x):
+    try:
+        if x is None:
+            return None
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).strip()
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+# ---------------------------------
+# Album summary accumulator (R-inspired)
+# ---------------------------------
+# Keyed by (Album_Artist, Album)
+album_acc = {}  # (album_artist, album_name) -> dict of sets/sums/lists
+
+def _album_bucket(album_artist: str, album_name: str):
+    key = (album_artist or "", album_name or "")
+    if key not in album_acc:
+        album_acc[key] = {
+            "years": set(),
+            "track_count": 0,
+            "artist_collections": set(),
+            "album_collections": set(),
+            "track_collections": set(),
+            "playlists": set(),
+            "file_types": set(),
+            "bitrate_vals": [],
+            "file_size_bytes_sum": 0,
+            "date_created": set(),
+        }
+    return album_acc[key]
+
 total_written = 0
 
 with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
@@ -168,7 +229,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
                             # Moods / labels / collections
                             moods               = _safe_join(getattr(track, "moods", None))
                             labels              = _safe_join(getattr(track, "labels", None))
-                            track_collections   = _safe_join(getattr(track, "collections", None))  # NEW
+                            track_collections   = _safe_join(getattr(track, "collections", None))
 
                             # Playlists (by file path)
                             playlists = ", ".join(sorted(track_to_playlists[file_path])) if file_path in track_to_playlists else ""
@@ -196,6 +257,41 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
                             writer.writerow(row)
                             total_written += 1
 
+                            # -----------------------------
+                            # Update album-level accumulator
+                            # -----------------------------
+                            b = _album_bucket(album_artist, album_name)
+                            b["track_count"] += 1
+
+                            if date_cleaned:
+                                b["years"].add(str(date_cleaned))
+
+                            # Collections are already comma-joined strings in the track export;
+                            # we split and re-unique at album level to mimic tidyverse unique()+paste().
+                            for item in _split_csvish(artist_collections):
+                                b["artist_collections"].add(item)
+                            for item in _split_csvish(album_collections):
+                                b["album_collections"].add(item)
+                            for item in _split_csvish(track_collections):
+                                b["track_collections"].add(item)
+
+                            # Playlists string might contain multiple titles; split to unique them.
+                            for item in _split_csvish(playlists):
+                                b["playlists"].add(item)
+
+                            if file_type:
+                                b["file_types"].add(str(file_type).strip())
+
+                            br = _try_float(bitrate)
+                            if br is not None:
+                                b["bitrate_vals"].append(br)
+
+                            if file_size_bytes:
+                                b["file_size_bytes_sum"] += int(file_size_bytes)
+
+                            if date_created:
+                                b["date_created"].add(str(date_created))
+
                         except Exception as e:
                             print(f"⚠️ Skipped a track due to error: {e}", flush=True)
                             continue
@@ -212,3 +308,67 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
             continue
 
 print(f"✅ Export complete: {total_written} tracks written to '{OUTPUT_CSV}'.", flush=True)
+
+# ---------------------------------
+# Step 3: Write R-inspired Artist_Album_Info CSV
+# ---------------------------------
+out_dir = os.path.dirname(os.path.abspath(OUTPUT_CSV)) or os.getcwd()
+ALBUM_INFO_CSV = os.path.join(out_dir, f"{_date_prefix} Artist_Album_Info.csv")
+
+album_header = [
+    "Album_Artist",
+    "Album",
+    "Year",
+    "Track_Count",
+    "Artist_Collections",
+    "Album_Collections",
+    "Track_Collections",
+    "Playlists",
+    "File_Type",
+    "Bitrate_Avg",
+    "Album_File_MB_Size",
+    "Date_Created",
+]
+
+def _avg(vals):
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    return (sum(vals) / len(vals)) if vals else ""
+
+# Sort rows for readability (Album_Artist then Album)
+keys_sorted = sorted(album_acc.keys(), key=lambda k: (k[0].lower(), k[1].lower()))
+
+with open(ALBUM_INFO_CSV, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(album_header)
+
+    for (album_artist, album_name) in keys_sorted:
+        b = album_acc[(album_artist, album_name)]
+
+        # Mimic: Year = paste(sort(unique(Date_Cleaned)), collapse=", ")
+        # Sorting years numerically when possible:
+        try:
+            years_sorted = sorted({int(y) for y in b["years"] if str(y).strip()})
+            year_str = ", ".join(str(y) for y in years_sorted) if years_sorted else ""
+        except Exception:
+            year_str = _sorted_unique_join(b["years"])
+
+        bitrate_avg = _avg(b["bitrate_vals"])
+        # File size: sum MB like your R (sum(File.Size..MB.)); we sum bytes then convert
+        album_mb = round(b["file_size_bytes_sum"] / (1024 * 1024), 1) if b["file_size_bytes_sum"] else 0
+
+        w.writerow([
+            album_artist,
+            album_name,
+            year_str,
+            b["track_count"],
+            _sorted_unique_join(b["artist_collections"]),
+            _sorted_unique_join(b["album_collections"]),
+            _sorted_unique_join(b["track_collections"]),
+            _sorted_unique_join(b["playlists"]),
+            _sorted_unique_join(b["file_types"]),
+            bitrate_avg,
+            album_mb,
+            _sorted_unique_join(b["date_created"]),
+        ])
+
+print(f"✅ Album summary complete: wrote '{ALBUM_INFO_CSV}'.", flush=True)

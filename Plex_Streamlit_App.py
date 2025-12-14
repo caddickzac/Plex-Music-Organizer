@@ -1,10 +1,12 @@
 """
-Plex Library Organizer — Streamlit App (scaffold v9)
+Plex Library Organizer — Streamlit App (scaffold v10)
 
-New in v9:
-- Sidebar pre-fills from ./config.txt if present (keys: "Plex URL:", "Plex Token:"; values may be quoted or plain).
-- Expected schema/values now render as a single 2-column table (no index).
-- Keeps prior features: cache-busted script discovery, hide export in Update tab, UTF-8 subprocesses, friendly success messages.
+New in v10:
+- Adds tab: "Compare Exported Metadata"
+  - Upload "old" and "new" exported CSVs
+  - Compare: Artist_Collections, Album_Collections, Track_Collections, Playlists, User_Rating
+  - Match key (Option A): Album_Artist + Album + Disc # + Track #
+  - Outputs a CSV based on "new" with *_Match columns: yes/no/not found
 """
 
 from __future__ import annotations
@@ -181,8 +183,9 @@ def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
     if not os.path.isfile(script_path):
         raise FileNotFoundError(f"Export script not found: {script_path}")
 
-    out_default = os.path.join(APP_DIR, "plex_music_exported_details.csv")
-    out_path = out_default
+    # NOTE: your export script now defaults to YYYY_MM_DD plex_music_exported_details.csv
+    # but we still pass OUTPUT_CSV here for predictability.
+    out_path = os.path.join(APP_DIR, "plex_music_exported_details.csv")
 
     env = os.environ.copy()
     env.update({
@@ -219,12 +222,11 @@ def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
     except Exception as e:
         raise RuntimeError(f"Failed running export script: {e}")
 
-    csv_file = out_path if os.path.isfile(out_path) else out_default
-    if not os.path.isfile(csv_file):
+    if not os.path.isfile(out_path):
         raise FileNotFoundError("Export finished but CSV not found. Ensure the script writes the file or honors OUTPUT_CSV.")
 
     try:
-        df = pd.read_csv(csv_file)
+        df = pd.read_csv(out_path)
     except Exception as e:
         raise RuntimeError(f"Could not read exported CSV: {e}")
 
@@ -270,6 +272,187 @@ def success_message_for_action(action_label: str, edited: int | None) -> str:
             verb = "updated"
         return f"{edited} {target_pl} {verb} successfully."
     return f"{action_label}: completed successfully."
+
+# ---------------------------
+# Compare helpers (new tab)
+# ---------------------------
+COMPARE_VARS = ["Artist_Collections", "Album_Collections", "Track_Collections", "Playlists", "User_Rating"]
+KEY_COLS_POSITION = ["Album_Artist", "Album", "Disc #", "Track #"]
+
+def _norm_str(x) -> str:
+    if x is None:
+        return ""
+    try:
+        # pandas may give NaN floats if dtype inference happens
+        if isinstance(x, float) and pd.isna(x):
+            return ""
+    except Exception:
+        pass
+    return str(x).strip()
+
+def _parse_set(cell: str) -> set[str]:
+    s = _norm_str(cell)
+    if not s:
+        return set()
+    parts = [p.strip() for p in s.split(",")]
+    parts = [p for p in parts if p]
+    parts = [" ".join(p.split()) for p in parts]
+    return set(parts)
+
+def _rating_to_float(x):
+    s = _norm_str(x)
+    if not s:
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def _build_position_key(df: pd.DataFrame) -> pd.Series:
+    missing = [c for c in KEY_COLS_POSITION if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing key columns in CSV: {missing}. Needed for matching.")
+    parts = [df[c].astype(str).fillna("").str.strip() for c in KEY_COLS_POSITION]
+    return parts[0].str.cat(parts[1:], sep=" | ")
+
+def compare_exports_add_match_cols(
+    old_df: pd.DataFrame,
+    new_df: pd.DataFrame,
+    include_details: bool = False
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Returns:
+      - result_df: copy of new_df with *_Match columns appended (yes/no/not found)
+      - summary: dict of counts
+
+    Match key: Album_Artist + Album + Disc # + Track #
+
+    If include_details=True:
+      For list vars (collections/playlists) also add:
+        <Var>_Old, <Var>_Lost, <Var>_Gained
+      For User_Rating also add:
+        User_Rating_Old
+    """
+    old = old_df.copy()
+    new = new_df.copy()
+
+    old["_key"] = _build_position_key(old)
+    new["_key"] = _build_position_key(new)
+
+    old_dupes = int(old["_key"].duplicated().sum())
+    new_dupes = int(new["_key"].duplicated().sum())
+
+    old1 = old.drop_duplicates("_key", keep="first")
+    new1 = new.drop_duplicates("_key", keep="first")
+
+    old_cols = ["_key"] + [c for c in COMPARE_VARS if c in old1.columns]
+    old_sub = old1[old_cols].copy()
+    old_sub = old_sub.rename(columns={c: f"{c}__old" for c in COMPARE_VARS if c in old_sub.columns})
+
+    merged = new1.merge(old_sub, on="_key", how="left", indicator=True)
+    found_mask = (merged["_merge"] == "both")
+
+    # Prepare columns we may add to the output mapping (per key)
+    per_key_cols = {}  # key -> dict of computed outputs
+
+    for i in range(len(merged)):
+        k = merged.loc[i, "_key"]
+        row_out = {}
+
+        is_found = bool(found_mask.iloc[i])
+
+        for c in COMPARE_VARS:
+            match_col = f"{c}_Match"
+
+            if not is_found:
+                row_out[match_col] = "not found"
+                if include_details:
+                    if c == "User_Rating":
+                        row_out["User_Rating_Old"] = "not found"
+                    else:
+                        row_out[f"{c}_Old"] = "not found"
+                        row_out[f"{c}_Lost"] = "not found"
+                        row_out[f"{c}_Gained"] = "not found"
+                continue
+
+            # FOUND: compare values
+            if c == "User_Rating":
+                new_val = merged.loc[i, c] if c in merged.columns else ""
+                old_val = merged.loc[i, f"{c}__old"] if f"{c}__old" in merged.columns else ""
+
+                n = _rating_to_float(new_val)
+                o = _rating_to_float(old_val)
+
+                if n is None and o is None:
+                    row_out[match_col] = "yes"
+                elif (n is not None) and (o is not None) and (n == o):
+                    row_out[match_col] = "yes"
+                else:
+                    row_out[match_col] = "no"
+
+                if include_details:
+                    # keep old rating as a readable string (or blank)
+                    row_out["User_Rating_Old"] = _norm_str(old_val)
+
+            else:
+                new_val = merged.loc[i, c] if c in merged.columns else ""
+                old_val = merged.loc[i, f"{c}__old"] if f"{c}__old" in merged.columns else ""
+
+                nset = _parse_set(new_val)
+                oset = _parse_set(old_val)
+
+                row_out[match_col] = "yes" if nset == oset else "no"
+
+                if include_details:
+                    lost = oset - nset
+                    gained = nset - oset
+                    row_out[f"{c}_Old"] = ", ".join(sorted(oset, key=lambda x: x.lower()))
+                    row_out[f"{c}_Lost"] = ", ".join(sorted(lost, key=lambda x: x.lower()))
+                    row_out[f"{c}_Gained"] = ", ".join(sorted(gained, key=lambda x: x.lower()))
+
+        per_key_cols[k] = row_out
+
+    # Build result_df on ORIGINAL new_df (not de-duped) by mapping per-key outputs back
+    result = new_df.copy()
+    result["_key"] = _build_position_key(result)
+
+    # Always add match columns
+    match_cols = [f"{c}_Match" for c in COMPARE_VARS]
+    for mc in match_cols:
+        result[mc] = result["_key"].map(lambda k: per_key_cols.get(k, {}).get(mc, "not found"))
+
+    # Optional details columns
+    if include_details:
+        for c in COMPARE_VARS:
+            if c == "User_Rating":
+                col = "User_Rating_Old"
+                result[col] = result["_key"].map(lambda k: per_key_cols.get(k, {}).get(col, "not found"))
+            else:
+                for suffix in ["Old", "Lost", "Gained"]:
+                    col = f"{c}_{suffix}"
+                    result[col] = result["_key"].map(lambda k: per_key_cols.get(k, {}).get(col, "not found"))
+
+    result = result.drop(columns=["_key"])
+
+    summary = {
+        "old_rows": int(len(old_df)),
+        "new_rows": int(len(new_df)),
+        "old_duplicate_keys": old_dupes,
+        "new_duplicate_keys": new_dupes,
+        "unique_old_keys": int(old1["_key"].nunique()),
+        "unique_new_keys": int(new1["_key"].nunique()),
+        "matched_keys": int(found_mask.sum()),
+        "unmatched_new_keys": int((~found_mask).sum()),
+        "include_details": bool(include_details),
+    }
+
+    # Match counts from result (includes duplicates too, which is fine for user-facing tallies)
+    for c in COMPARE_VARS:
+        mc = f"{c}_Match"
+        vc = result[mc].value_counts(dropna=False).to_dict()
+        summary[f"{mc}_counts"] = {str(k): int(v) for k, v in vc.items()}
+
+    return result, summary
 
 # ---------------------------
 # UI pieces
@@ -403,6 +586,130 @@ def ui_update_tab(cfg: AppConfig):
             except Exception as e:
                 st.error(f"Execution error: {e}")
 
+def ui_compare_tab():
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Zurich")
+    except Exception:
+        tz = None  # fallback to local server time if zoneinfo unavailable
+
+    st.subheader("Compare Exported Metadata")
+    st.caption(
+        "Upload an **old** and **new** export CSV. Tracks are matched by: "
+        "**Album_Artist + Album + Disc # + Track #**. "
+        "Outputs a CSV based on **new** with *_Match columns (yes/no/not found). "
+        "Optionally include Old/Lost/Gained detail columns."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        old_up = st.file_uploader("Upload OLD export CSV", type=["csv"], key="compare_old")
+    with col2:
+        new_up = st.file_uploader("Upload NEW export CSV", type=["csv"], key="compare_new")
+
+    if old_up is None or new_up is None:
+        st.info("Upload both files to enable comparison.")
+        return
+
+    try:
+        old_df = pd.read_csv(old_up, dtype=str, keep_default_na=False)
+        new_df = pd.read_csv(new_up, dtype=str, keep_default_na=False)
+    except Exception as e:
+        st.error(f"Could not read one of the CSVs: {e}")
+        return
+
+    with st.expander("Preview (first 25 rows)"):
+        st.markdown("**OLD**")
+        st.dataframe(old_df.head(25), use_container_width=True)
+        st.markdown("**NEW**")
+        st.dataframe(new_df.head(25), use_container_width=True)
+
+    st.divider()
+
+    # sanity check for key columns
+    missing_old = [c for c in KEY_COLS_POSITION if c not in old_df.columns]
+    missing_new = [c for c in KEY_COLS_POSITION if c not in new_df.columns]
+    if missing_old or missing_new:
+        st.error(
+            f"Missing key columns needed for matching.\n\n"
+            f"- Missing in OLD: {missing_old}\n"
+            f"- Missing in NEW: {missing_new}\n\n"
+            f"Expected columns: {KEY_COLS_POSITION}"
+        )
+        return
+
+    st.write("Comparison variables:")
+    st.code("\n".join(COMPARE_VARS), language="text")
+
+    include_details = st.checkbox(
+        "Include details (Old/Lost/Gained columns for collections & playlists)",
+        value=False
+    )
+
+    run = st.button("Run comparison", type="primary")
+    if not run:
+        return
+
+    try:
+        result_df, summary = compare_exports_add_match_cols(
+            old_df,
+            new_df,
+            include_details=include_details
+        )
+
+        st.success("Comparison complete.")
+
+        # Summary metrics
+        st.markdown("### Summary")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("OLD rows", summary["old_rows"])
+        m2.metric("NEW rows", summary["new_rows"])
+        m3.metric("Matched keys", summary["matched_keys"])
+        m4.metric("Unmatched NEW keys", summary["unmatched_new_keys"])
+
+        if summary["old_duplicate_keys"] or summary["new_duplicate_keys"]:
+            st.warning(
+                f"Duplicate match keys detected (OLD={summary['old_duplicate_keys']}, NEW={summary['new_duplicate_keys']}). "
+                "For duplicates, the comparison uses the *first* occurrence per key."
+            )
+
+        st.markdown("### Match breakdown")
+        for c in COMPARE_VARS:
+            mc = f"{c}_Match"
+            counts = summary.get(f"{mc}_counts", {})
+            yes_n = counts.get("yes", 0)
+            no_n = counts.get("no", 0)
+            nf_n = counts.get("not found", 0)
+            st.write(f"**{mc}** — yes: {yes_n:,} | no: {no_n:,} | not found: {nf_n:,}")
+
+        st.markdown("### Output preview (first 50 rows)")
+        st.dataframe(result_df.head(50), use_container_width=True)
+
+        # ---- NEW: Save to APP_DIR with datestamped filename ----
+        now = datetime.now(tz) if tz else datetime.now()
+        date_prefix = now.strftime("%Y_%m_%d")
+        out_filename = f"{date_prefix} metadata_comparison_output.csv"
+        out_path = os.path.join(APP_DIR, out_filename)
+
+        try:
+            result_df.to_csv(out_path, index=False, encoding="utf-8")
+            st.info(f"Saved to app folder: `{out_path}`")
+        except Exception as e:
+            st.error(f"Could not save file to app folder: {e}")
+
+        # ---- Download button (manual click required by browser) ----
+        out_buf = io.BytesIO()
+        result_df.to_csv(out_buf, index=False)
+        st.download_button(
+            f"Download {out_filename}",
+            data=out_buf.getvalue(),
+            file_name=out_filename,
+            mime="text/csv",
+        )
+
+    except Exception as e:
+        st.error(f"Comparison failed: {e}")
 
 # ---------------------------
 # Main
@@ -411,11 +718,14 @@ def main():
     st.title(APP_TITLE)
     st.caption("Export music metadata, update metadata, and add to playlists and collections.")
     cfg = ui_sidebar_config()
-    tab1, tab2 = st.tabs(["Export", "Update from CSV"])
+
+    tab1, tab2, tab3 = st.tabs(["Export", "Update from CSV", "Compare Exported Metadata"])
     with tab1:
         ui_export_tab(cfg)
     with tab2:
         ui_update_tab(cfg)
+    with tab3:
+        ui_compare_tab()
 
 if __name__ == "__main__":
     main()
