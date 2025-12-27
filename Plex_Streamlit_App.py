@@ -1,12 +1,13 @@
 """
-Plex Library Organizer — Streamlit App (scaffold v10)
+Plex Library Organizer — Streamlit App (scaffold v11)
 
-New in v10:
-- Adds tab: "Compare Exported Metadata"
-  - Upload "old" and "new" exported CSVs
-  - Compare: Artist_Collections, Album_Collections, Track_Collections, Playlists, User_Rating
-  - Match key (Option A): Album_Artist + Album + Disc # + Track #
-  - Outputs a CSV based on "new" with *_Match columns: yes/no/not found
+New in v11:
+- Renames tab "Update from CSV" → "Update from CSV (Single Script)"
+- Adds tab "Update from CSV (Multiple Scripts)"
+  - Checkbox select multiple actions
+  - Runs scripts sequentially on the same uploaded CSV
+  - Shows expected schema/values for selected scripts
+- Keeps "Compare Exported Metadata" tab (with optional detail columns + datestamped save)
 """
 
 from __future__ import annotations
@@ -183,8 +184,7 @@ def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
     if not os.path.isfile(script_path):
         raise FileNotFoundError(f"Export script not found: {script_path}")
 
-    # NOTE: your export script now defaults to YYYY_MM_DD plex_music_exported_details.csv
-    # but we still pass OUTPUT_CSV here for predictability.
+    # Keep this for app predictability; script itself will still produce a dated file too.
     out_path = os.path.join(APP_DIR, "plex_music_exported_details.csv")
 
     env = os.environ.copy()
@@ -192,7 +192,6 @@ def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
         "PLEX_BASEURL": cfg.plex_baseurl,
         "PLEX_TOKEN": cfg.plex_token,
         "OUTPUT_CSV": out_path,
-        # Force UTF-8 for child process output on Windows
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1",
     })
@@ -274,7 +273,29 @@ def success_message_for_action(action_label: str, edited: int | None) -> str:
     return f"{action_label}: completed successfully."
 
 # ---------------------------
-# Compare helpers (new tab)
+# Forgiving CSV reader (handles cp1252/latin-1 etc.)
+# ---------------------------
+def read_csv_forgiving(uploaded_file) -> pd.DataFrame:
+    """
+    Read a user-uploaded CSV with encoding fallbacks.
+    Tries: utf-8, utf-8-sig, cp1252, latin-1
+    """
+    raw = uploaded_file.getvalue()
+
+    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            # if it's not encoding-related, fall through to last-resort decode below
+            pass
+
+    text = raw.decode("utf-8", errors="replace")
+    return pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
+
+# ---------------------------
+# Compare helpers
 # ---------------------------
 COMPARE_VARS = ["Artist_Collections", "Album_Collections", "Track_Collections", "Playlists", "User_Rating"]
 KEY_COLS_POSITION = ["Album_Artist", "Album", "Disc #", "Track #"]
@@ -283,7 +304,6 @@ def _norm_str(x) -> str:
     if x is None:
         return ""
     try:
-        # pandas may give NaN floats if dtype inference happens
         if isinstance(x, float) and pd.isna(x):
             return ""
     except Exception:
@@ -320,19 +340,6 @@ def compare_exports_add_match_cols(
     new_df: pd.DataFrame,
     include_details: bool = False
 ) -> tuple[pd.DataFrame, dict]:
-    """
-    Returns:
-      - result_df: copy of new_df with *_Match columns appended (yes/no/not found)
-      - summary: dict of counts
-
-    Match key: Album_Artist + Album + Disc # + Track #
-
-    If include_details=True:
-      For list vars (collections/playlists) also add:
-        <Var>_Old, <Var>_Lost, <Var>_Gained
-      For User_Rating also add:
-        User_Rating_Old
-    """
     old = old_df.copy()
     new = new_df.copy()
 
@@ -352,8 +359,7 @@ def compare_exports_add_match_cols(
     merged = new1.merge(old_sub, on="_key", how="left", indicator=True)
     found_mask = (merged["_merge"] == "both")
 
-    # Prepare columns we may add to the output mapping (per key)
-    per_key_cols = {}  # key -> dict of computed outputs
+    per_key_cols = {}
 
     for i in range(len(merged)):
         k = merged.loc[i, "_key"]
@@ -375,7 +381,6 @@ def compare_exports_add_match_cols(
                         row_out[f"{c}_Gained"] = "not found"
                 continue
 
-            # FOUND: compare values
             if c == "User_Rating":
                 new_val = merged.loc[i, c] if c in merged.columns else ""
                 old_val = merged.loc[i, f"{c}__old"] if f"{c}__old" in merged.columns else ""
@@ -391,7 +396,6 @@ def compare_exports_add_match_cols(
                     row_out[match_col] = "no"
 
                 if include_details:
-                    # keep old rating as a readable string (or blank)
                     row_out["User_Rating_Old"] = _norm_str(old_val)
 
             else:
@@ -412,16 +416,13 @@ def compare_exports_add_match_cols(
 
         per_key_cols[k] = row_out
 
-    # Build result_df on ORIGINAL new_df (not de-duped) by mapping per-key outputs back
     result = new_df.copy()
     result["_key"] = _build_position_key(result)
 
-    # Always add match columns
     match_cols = [f"{c}_Match" for c in COMPARE_VARS]
     for mc in match_cols:
         result[mc] = result["_key"].map(lambda k: per_key_cols.get(k, {}).get(mc, "not found"))
 
-    # Optional details columns
     if include_details:
         for c in COMPARE_VARS:
             if c == "User_Rating":
@@ -446,7 +447,6 @@ def compare_exports_add_match_cols(
         "include_details": bool(include_details),
     }
 
-    # Match counts from result (includes duplicates too, which is fine for user-facing tallies)
     for c in COMPARE_VARS:
         mc = f"{c}_Match"
         vc = result[mc].value_counts(dropna=False).to_dict()
@@ -458,7 +458,6 @@ def compare_exports_add_match_cols(
 # UI pieces
 # ---------------------------
 def ui_sidebar_config() -> AppConfig:
-    # Pre-fill from config.txt on first load
     file_cfg = load_config_txt()
     if "baseurl" not in st.session_state and file_cfg.plex_baseurl:
         st.session_state["baseurl"] = file_cfg.plex_baseurl
@@ -469,7 +468,6 @@ def ui_sidebar_config() -> AppConfig:
     baseurl = st.sidebar.text_input("Plex URL", placeholder="http://127.0.0.1:32400", key="baseurl")
     token = st.sidebar.text_input("Plex Token", type="password", placeholder="••••••••", key="token")
 
-    # Hint if we actually loaded defaults from file
     if (file_cfg.plex_baseurl or file_cfg.plex_token):
         st.sidebar.caption("Defaults loaded from config.txt")
 
@@ -484,7 +482,7 @@ def ui_export_tab(cfg: AppConfig):
         try:
             df = export_library_metadata_via_script(cfg)
             st.success(f"Exported {len(df):,} tracks.")
-            st.dataframe(df.head(50))
+            st.dataframe(df.head(50), use_container_width=True)
             out = io.BytesIO()
             df.to_csv(out, index=False)
             st.download_button(
@@ -497,8 +495,7 @@ def ui_export_tab(cfg: AppConfig):
             st.error(f"Export failed: {e}")
 
 def ui_update_tab(cfg: AppConfig):
-    st.subheader("Submit changes from CSV → run your scripts")
-    # Hide export scripts here; pass folder signature to bust cache on changes
+    st.subheader("Submit changes from CSV → run a single script")
     registry = discover_scripts(include_exports=False, _sig=scripts_signature())
     if not registry:
         st.warning("No scripts found. Create a `Scripts/` folder with .py files. Optional: add a matching .json sidecar for schema & action name.")
@@ -522,13 +519,13 @@ def ui_update_tab(cfg: AppConfig):
         if not info.schema and not info.expected_values:
             st.caption("No schema provided for this action. Add a sidecar JSON with `expected_columns` (and optionally `expected_values`).")
 
-    uploaded = st.file_uploader("Upload CSV", type=["csv"], accept_multiple_files=False)
+    uploaded = st.file_uploader("Upload CSV", type=["csv"], accept_multiple_files=False, key="single_csv")
 
     if uploaded is not None:
         try:
-            df = pd.read_csv(uploaded)
+            df = read_csv_forgiving(uploaded)
             st.write(f"CSV loaded with {len(df):,} rows.")
-            st.dataframe(df.head(25))
+            st.dataframe(df.head(25), use_container_width=True)
         except Exception as e:
             st.error(f"Could not read CSV: {e}")
             return
@@ -536,9 +533,9 @@ def ui_update_tab(cfg: AppConfig):
         st.divider()
         st.warning("Writes to Plex are potentially destructive. Make a backup/export first.")
 
-        confirm_phrase = st.text_input("Type CONFIRM to enable execution")
+        confirm_phrase = st.text_input("Type CONFIRM to enable execution", key="single_confirm")
         ok = (confirm_phrase.strip().upper() == "CONFIRM")
-        run_btn = st.button("Run script", type="primary", disabled=not ok)
+        run_btn = st.button("Run script", type="primary", disabled=not ok, key="single_run")
 
         if run_btn and ok:
             tmp_path = os.path.join(APP_DIR, "uploaded.csv")
@@ -560,7 +557,7 @@ def ui_update_tab(cfg: AppConfig):
                 })
                 proc = subprocess.run(
                     spec.cmd,
-                    input=payload,            # pass STR with text=True
+                    input=payload,
                     env=env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -586,13 +583,171 @@ def ui_update_tab(cfg: AppConfig):
             except Exception as e:
                 st.error(f"Execution error: {e}")
 
+def ui_update_multi_tab(cfg: AppConfig):
+    st.subheader("Submit changes from CSV → run multiple scripts in sequence")
+
+    registry = discover_scripts(include_exports=False, _sig=scripts_signature())
+    if not registry:
+        st.warning(
+            "No scripts found. Create a `Scripts/` folder with .py files. "
+            "Optional: add a matching .json sidecar for schema & action name."
+        )
+        return
+
+    action_labels = list(registry.keys())
+
+    st.caption("Select one or more actions to run (they will execute top-to-bottom).")
+
+    if "multi_selected_actions" not in st.session_state:
+        st.session_state["multi_selected_actions"] = []
+
+    selected = []
+    for label in action_labels:
+        checked = st.checkbox(
+            label,
+            value=(label in st.session_state["multi_selected_actions"]),
+            key=f"multi_{label}"
+        )
+        if checked:
+            selected.append(label)
+
+    st.session_state["multi_selected_actions"] = selected
+
+    if not selected:
+        st.info("Select at least one action to proceed.")
+        return
+
+    with st.expander("Expected CSV schema & values (selected actions)", expanded=True):
+        rows = []
+        for label in selected:
+            info = registry[label]
+            cols = list(info.schema or [])
+            vals = list(info.expected_values or [])
+            n = max(len(cols), len(vals), 1)
+            cols += [""] * (n - len(cols))
+            vals += [""] * (n - len(vals))
+
+            if not info.schema and not info.expected_values:
+                rows.append({"Action": info.action, "expected_columns": "", "expected_values": ""})
+            else:
+                for c, v in zip(cols, vals):
+                    rows.append({"Action": info.action, "expected_columns": c, "expected_values": v})
+
+        spec_df = pd.DataFrame(rows)
+        try:
+            st.dataframe(spec_df, use_container_width=True, hide_index=True)
+        except TypeError:
+            st.dataframe(spec_df.reset_index(drop=True), use_container_width=True)
+
+        st.caption("Actions run in the order listed above.")
+
+    uploaded = st.file_uploader(
+        "Upload CSV (used for all selected scripts)",
+        type=["csv"],
+        accept_multiple_files=False,
+        key="multi_csv"
+    )
+    if uploaded is None:
+        return
+
+    try:
+        df = read_csv_forgiving(uploaded)
+        st.write(f"CSV loaded with {len(df):,} rows.")
+        st.dataframe(df.head(25), use_container_width=True)
+    except Exception as e:
+        st.error(f"Could not read CSV: {e}")
+        return
+
+    st.divider()
+    st.warning("Writes to Plex are potentially destructive. Make a backup/export first.")
+
+    confirm_phrase = st.text_input("Type CONFIRM to enable execution", key="multi_confirm")
+    ok = (confirm_phrase.strip().upper() == "CONFIRM")
+
+    run_btn = st.button(
+        f"Run {len(selected)} script(s) in order",
+        type="primary",
+        disabled=not ok,
+        key="multi_run"
+    )
+
+    if not (run_btn and ok):
+        return
+
+    tmp_path = os.path.join(APP_DIR, "uploaded.csv")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(uploaded.getvalue())
+    except Exception as e:
+        st.error(f"Could not write temporary CSV to disk: {e}")
+        return
+
+    st.divider()
+    st.markdown("### Execution log")
+
+    env = os.environ.copy()
+    env.update({
+        "PLEX_BASEURL": cfg.plex_baseurl,
+        "PLEX_TOKEN": cfg.plex_token,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+    })
+
+    any_fail = False
+
+    for idx, label in enumerate(selected, start=1):
+        spec = registry[label]
+        st.markdown(f"#### {idx}. {spec.action}")
+
+        try:
+            payload = json.dumps({"action": spec.action, "csv_path": tmp_path})
+
+            proc = subprocess.run(
+                spec.cmd,
+                input=payload,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+
+            stdout = proc.stdout or ""
+            stderr = proc.stderr or ""
+            code = proc.returncode
+
+            st.code(stdout or "<no stdout>", language="bash")
+            if stderr:
+                st.error(stderr)
+
+            if code == 0:
+                edited = parse_edited_count(stdout)
+                st.success(success_message_for_action(spec.action, edited))
+            else:
+                any_fail = True
+                st.error(f"{spec.action}: script failed with exit code {code}")
+
+        except FileNotFoundError:
+            any_fail = True
+            st.error("Script not found. Check the `Scripts/` folder paths.")
+        except Exception as e:
+            any_fail = True
+            st.error(f"Execution error: {e}")
+
+    st.divider()
+    if any_fail:
+        st.warning("Finished running selected scripts — at least one failed. Review logs above.")
+    else:
+        st.success("Finished running all selected scripts successfully.")
+
 def ui_compare_tab():
     from datetime import datetime
     try:
         from zoneinfo import ZoneInfo
         tz = ZoneInfo("Europe/Zurich")
     except Exception:
-        tz = None  # fallback to local server time if zoneinfo unavailable
+        tz = None
 
     st.subheader("Compare Exported Metadata")
     st.caption(
@@ -613,8 +768,8 @@ def ui_compare_tab():
         return
 
     try:
-        old_df = pd.read_csv(old_up, dtype=str, keep_default_na=False)
-        new_df = pd.read_csv(new_up, dtype=str, keep_default_na=False)
+        old_df = read_csv_forgiving(old_up)
+        new_df = read_csv_forgiving(new_up)
     except Exception as e:
         st.error(f"Could not read one of the CSVs: {e}")
         return
@@ -627,7 +782,6 @@ def ui_compare_tab():
 
     st.divider()
 
-    # sanity check for key columns
     missing_old = [c for c in KEY_COLS_POSITION if c not in old_df.columns]
     missing_new = [c for c in KEY_COLS_POSITION if c not in new_df.columns]
     if missing_old or missing_new:
@@ -644,23 +798,18 @@ def ui_compare_tab():
 
     include_details = st.checkbox(
         "Include details (Old/Lost/Gained columns for collections & playlists)",
-        value=False
+        value=False,
+        key="compare_details"
     )
 
-    run = st.button("Run comparison", type="primary")
+    run = st.button("Run comparison", type="primary", key="compare_run")
     if not run:
         return
 
     try:
-        result_df, summary = compare_exports_add_match_cols(
-            old_df,
-            new_df,
-            include_details=include_details
-        )
-
+        result_df, summary = compare_exports_add_match_cols(old_df, new_df, include_details=include_details)
         st.success("Comparison complete.")
 
-        # Summary metrics
         st.markdown("### Summary")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("OLD rows", summary["old_rows"])
@@ -678,15 +827,15 @@ def ui_compare_tab():
         for c in COMPARE_VARS:
             mc = f"{c}_Match"
             counts = summary.get(f"{mc}_counts", {})
-            yes_n = counts.get("yes", 0)
-            no_n = counts.get("no", 0)
-            nf_n = counts.get("not found", 0)
-            st.write(f"**{mc}** — yes: {yes_n:,} | no: {no_n:,} | not found: {nf_n:,}")
+            st.write(
+                f"**{mc}** — yes: {counts.get('yes', 0):,} | "
+                f"no: {counts.get('no', 0):,} | "
+                f"not found: {counts.get('not found', 0):,}"
+            )
 
         st.markdown("### Output preview (first 50 rows)")
         st.dataframe(result_df.head(50), use_container_width=True)
 
-        # ---- NEW: Save to APP_DIR with datestamped filename ----
         now = datetime.now(tz) if tz else datetime.now()
         date_prefix = now.strftime("%Y_%m_%d")
         out_filename = f"{date_prefix} metadata_comparison_output.csv"
@@ -698,7 +847,6 @@ def ui_compare_tab():
         except Exception as e:
             st.error(f"Could not save file to app folder: {e}")
 
-        # ---- Download button (manual click required by browser) ----
         out_buf = io.BytesIO()
         result_df.to_csv(out_buf, index=False)
         st.download_button(
@@ -719,12 +867,19 @@ def main():
     st.caption("Export music metadata, update metadata, and add to playlists and collections.")
     cfg = ui_sidebar_config()
 
-    tab1, tab2, tab3 = st.tabs(["Export", "Update from CSV", "Compare Exported Metadata"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Export",
+        "Update from CSV (Single Script)",
+        "Update from CSV (Multiple Scripts)",
+        "Compare Exported Metadata",
+    ])
     with tab1:
         ui_export_tab(cfg)
     with tab2:
         ui_update_tab(cfg)
     with tab3:
+        ui_update_multi_tab(cfg)
+    with tab4:
         ui_compare_tab()
 
 if __name__ == "__main__":
