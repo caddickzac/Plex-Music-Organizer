@@ -8,7 +8,7 @@ A simple Streamlit app to **export** your Plex music metadata and **apply bulk u
 - **One-click Export** (via `Scripts/export_library_metadata.py`) with live status logs.
 - **Update from CSV**:
   - Add artist-genre information for each track.
-  - Bulk relabel album titles, album genres, disc numbers, track artist, track numbers, track ratings, and track title.
+  - Bulk relabel album dates, album titles, album genres, disc numbers, track artist, track date created, track numbers, track ratings, and track title.
   - Create music collections (track, album, or artist level). 
   - Create music playlists. 
   - Details **expected columns** and **expected values** for ease of use. 
