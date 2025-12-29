@@ -1,13 +1,21 @@
 """
-Plex Library Organizer — Streamlit App (scaffold v11)
+Plex Library Organizer — Streamlit App (scaffold v13)
 
-New in v11:
-- Renames tab "Update from CSV" → "Update from CSV (Single Script)"
-- Adds tab "Update from CSV (Multiple Scripts)"
-  - Checkbox select multiple actions
-  - Runs scripts sequentially on the same uploaded CSV
-  - Shows expected schema/values for selected scripts
-- Keeps "Compare Exported Metadata" tab (with optional detail columns + datestamped save)
+New in v13:
+- Keeps "Export", "Update from CSV (Single Script)", "Update from CSV (Multiple Scripts)",
+  and "Compare Exported Metadata" tabs.
+- "Playlist Creator" tab:
+  - Uses Scripts/playlist_creator.py
+  - Supports multiple seed structures (tracks, artists, playlists, collections, genres)
+  - Adds seed-mode selector:
+      A) Genre focus
+      B) History focus
+      C) Sonic Album Mix
+      D) Sonic Artist Mix
+      E) Sonic Albums + Artists
+      F) Album Echoes
+  - Adds explore–exploit slider and diversity weighting
+  - Toggles for using sonically similar albums / artists
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ APP_TITLE = "Plex Music Library — Organizer"
 APP_DIR = os.getcwd()
 SCRIPTS_DIR = os.path.join(APP_DIR, "Scripts")
 CONFIG_TXT = os.path.join(APP_DIR, "config.txt")
+PLAYLIST_CREATOR_SCRIPT = os.path.join(SCRIPTS_DIR, "playlist_creator.py")
 
 # ---------------------------
 # Config dataclass
@@ -137,6 +146,10 @@ def discover_scripts(include_exports: bool = True, _sig: str = "") -> Dict[str, 
         schema: List[str] = []
         expected_values: List[str] = []
 
+        # Skip Playlist Creator from the CSV update actions
+        if base == "playlist_creator.py":
+            continue
+
         try:
             if os.path.isfile(meta_path):
                 with open(meta_path, "r", encoding="utf-8") as f:
@@ -185,7 +198,7 @@ def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
         raise FileNotFoundError(f"Export script not found: {script_path}")
 
     # Keep this for app predictability; script itself will still produce a dated file too.
-    out_path = os.path.join(APP_DIR, "plex_music_exported_details.csv")
+    out_path = os.path.join(APP_DIR, "Track_Level_Info.csv")
 
     env = os.environ.copy()
     env.update({
@@ -465,7 +478,7 @@ def ui_sidebar_config() -> AppConfig:
         st.session_state["token"] = file_cfg.plex_token
 
     st.sidebar.header("Configuration")
-    baseurl = st.sidebar.text_input("Plex URL", placeholder="http://127.0.0.1:32400", key="baseurl")
+    baseurl = st.sidebar.text_input("Plex URL", placeholder="http://http://127.0.0.1:32400", key="baseurl")
     token = st.sidebar.text_input("Plex Token", type="password", placeholder="••••••••", key="token")
 
     if (file_cfg.plex_baseurl or file_cfg.plex_token):
@@ -486,9 +499,9 @@ def ui_export_tab(cfg: AppConfig):
             out = io.BytesIO()
             df.to_csv(out, index=False)
             st.download_button(
-                "Download plex_music_exported_details.csv",
+                "Download Track_Level_Info.csv",
                 data=out.getvalue(),
-                file_name="plex_music_exported_details.csv",
+                file_name="Track_Level_Info.csv",
                 mime="text/csv",
             )
         except Exception as e:
@@ -741,6 +754,261 @@ def ui_update_multi_tab(cfg: AppConfig):
     else:
         st.success("Finished running all selected scripts successfully.")
 
+def ui_playlist_creator_tab(cfg: AppConfig):
+    st.subheader("Playlist Creator (sonic similarity + custom seeds)")
+
+    st.caption(
+        "Use Plex listening history, sonic similarity, and custom seeds "
+        "to auto-generate a new playlist. This calls `playlist_creator.py` "
+        "in the Scripts/ folder."
+    )
+
+    st.markdown("**Playlist Creator script location**")
+    st.code(PLAYLIST_CREATOR_SCRIPT, language="text")
+
+    if not os.path.isfile(PLAYLIST_CREATOR_SCRIPT):
+        st.error("`playlist_creator.py` not found in Scripts/. Put it there or adjust PLAYLIST_CREATOR_SCRIPT.")
+        return
+
+    if not (cfg.plex_baseurl and cfg.plex_token):
+        st.warning("Enter Plex URL and Plex Token in the left panel first.")
+        return
+
+    # Music library name
+    music_lib = st.text_input("Music library name", value="Music", key="pc_lib")
+
+    st.divider()
+    st.markdown("### Playlist parameters")
+
+    col_a, col_b, col_c = st.columns(3)
+
+    with col_a:
+        exclude_days = st.number_input("Exclude played (days)", min_value=0, max_value=365, value=3, step=1)
+        lookback_days = st.number_input("History lookback (days)", min_value=1, max_value=365, value=30, step=1)
+        max_tracks = st.number_input("Max tracks", min_value=5, max_value=300, value=50, step=1)
+
+    with col_b:
+        sonic_similar_limit = st.number_input("Sonically similar per seed", min_value=5, max_value=100, value=20, step=1)
+        historical_ratio = st.slider("Historical ratio (fraction of tracks from history)", 0.0, 1.0, 0.3, 0.05)
+        use_time_periods = st.checkbox("Use time-of-day periods", value=False)
+
+    with col_c:
+        # Explore / exploit slider: 0 = explore, 1 = strongly exploit popular tracks
+        exploit_weight = st.slider(
+            "Explore ↔ Exploit (popularity bias)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.7,
+            step=0.05,
+            help="0 = fully exploratory (more random), 1 = heavily favor most popular tracks on each album/artist."
+        )
+        seed_fallback_mode = st.radio(
+            "When explicit seeds are too few, fill from:",
+            options=["history", "genre"],
+            index=0,
+        )
+
+    st.markdown("### Rating filters")
+    st.caption("Minimum ratings (0–10, Plex's internal scale). Set to 0 to ignore a filter.")
+
+    r1, r2, r3, r4 = st.columns([1, 1, 1, 1])
+
+    with r1:
+        min_track = st.number_input("Min track rating", min_value=0, max_value=10, value=7, step=1)
+    with r2:
+        min_album = st.number_input("Min album rating", min_value=0, max_value=10, value=0, step=1)
+    with r3:
+        min_artist = st.number_input("Min artist rating", min_value=0, max_value=10, value=0, step=1)
+    with r4:
+        allow_unrated = st.checkbox(
+            "Allow unrated",
+            value=True,
+            help="If checked, tracks/albums/artists with no rating are allowed even when minimums are set."
+        )
+
+    st.divider()
+    st.markdown("### Seed strategy")
+
+    seed_mode_label = st.selectbox(
+        "Seed mode",
+        [
+            "Auto (infer from seeds/history)",
+            "History only",
+            "Genre seeds",
+            "Sonic Album Mix",
+            "Sonic Artist Mix",
+            "Sonic Combo (Albums + Artists)",
+            "Album Echoes (seed albums only)",
+            "Sonic Tracks (track-level similarity)",
+        ],
+        index=0,
+        help=(
+            "How to build the core candidate set:\n"
+            "- Auto: let the script infer based on provided seeds and history\n"
+            "- History only: build from listening history\n"
+            "- Genre seeds: use genre_seeds only\n"
+            "- Sonic Album/Artist: seed + sonically similar albums/artists\n"
+            "- Sonic Combo: both sonic albums and sonic artists\n"
+            "- Album Echoes: one track per seed album, no extra sonic expansion\n"
+            "- Sonic Tracks: expand directly from seed tracks via sonicallySimilar()"
+        )
+    )
+
+    # Map UI label → internal seed_mode string
+    seed_mode_map = {
+        "Auto (infer from seeds/history)": "",
+        "History only": "history",
+        "Genre seeds": "genre",
+        "Sonic Album Mix": "sonic_album_mix",
+        "Sonic Artist Mix": "sonic_artist_mix",
+        "Sonic Combo (Albums + Artists)": "sonic_combo",
+        "Album Echoes (seed albums only)": "album_echoes",
+        "Sonic Tracks (track-level similarity)": "track_sonic",
+    }
+    seed_mode = seed_mode_map[seed_mode_label]
+
+    st.markdown("### Seed sources")
+
+    st.caption(
+        "Any combination of seeds can be used. Playlist Creator will deduplicate "
+        "and then expand via sonic similarity and/or history."
+    )
+
+    def _parse_list(text: str) -> List[str]:
+        return [p.strip() for p in (text or "").split(",") if p.strip()]
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        seed_track_keys_raw = st.text_input(
+            "Seed track ratingKeys (comma-separated)",
+            value="",
+            placeholder="e.g., 12345, 67890",
+            key="pc_seed_tracks",
+        )
+        seed_artist_names_raw = st.text_input(
+            "Seed artist names (comma-separated)",
+            value="",
+            placeholder="e.g., Bill Evans, Miles Davis",
+            key="pc_seed_artists",
+        )
+        seed_playlist_names_raw = st.text_input(
+            "Seed playlist names (comma-separated)",
+            value="",
+            placeholder="e.g., Dinner Party",
+            key="pc_seed_playlists",
+        )
+
+    with col2:
+        seed_collection_names_raw = st.text_input(
+            "Seed collection names (comma-separated)",
+            value="",
+            placeholder="e.g., All That Jazz",
+            key="pc_seed_collections",
+        )
+        genre_seeds_raw = st.text_input(
+            "Genre seeds (comma-separated)",
+            value="",
+            placeholder="e.g., Jazz, Soul, Ambient",
+            key="pc_seed_genres",
+        )
+
+    seed_track_keys = _parse_list(seed_track_keys_raw)
+    seed_artist_names = _parse_list(seed_artist_names_raw)
+    seed_playlist_names = _parse_list(seed_playlist_names_raw)
+    seed_collection_names = _parse_list(seed_collection_names_raw)
+    genre_seeds = _parse_list(genre_seeds_raw)
+
+    st.divider()
+    st.warning(
+        "Playlist Creator will create a **new playlist** in Plex but will not edit "
+        "metadata or existing playlists."
+    )
+
+    run_btn = st.button("Generate Playlist", type="primary", key="pc_run")
+    if not run_btn:
+        return
+
+    st.divider()
+    st.markdown("### Playlist Creator log")
+    log_box = st.empty()
+    log_lines: List[str] = []
+
+    env = os.environ.copy()
+    env.update({
+        "PLEX_BASEURL": cfg.plex_baseurl,
+        "PLEX_URL": cfg.plex_baseurl,
+        "PLEX_TOKEN": cfg.plex_token,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+    })
+
+    payload = {
+        "plex": {
+            "url": cfg.plex_baseurl,
+            "token": cfg.plex_token,
+            "music_library": music_lib,
+        },
+        "playlist": {
+            "exclude_played_days": int(exclude_days),
+            "history_lookback_days": int(lookback_days),
+            "max_tracks": int(max_tracks),
+            "sonic_similar_limit": int(sonic_similar_limit),
+            "historical_ratio": float(historical_ratio),
+            "exploit_weight": float(exploit_weight),
+            "min_rating": {
+                "track": int(min_track),
+                "album": int(min_album),
+                "artist": int(min_artist),
+            },
+            "allow_unrated": 1 if allow_unrated else 0,
+            "use_time_periods": 1 if use_time_periods else 0,
+            "seed_fallback_mode": seed_fallback_mode.lower(),
+            "seed_mode": seed_mode,
+            # seed lists
+            "seed_track_keys": seed_track_keys,
+            "seed_artist_names": seed_artist_names,
+            "seed_playlist_names": seed_playlist_names,
+            "seed_collection_names": seed_collection_names,
+            "genre_seeds": genre_seeds,
+        },
+    }
+
+    try:
+        proc = subprocess.Popen(
+            ["python", PLAYLIST_CREATOR_SCRIPT],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+            env=env,
+        )
+        assert proc.stdout is not None
+        assert proc.stdin is not None
+
+        proc.stdin.write(json.dumps(payload))
+        proc.stdin.close()
+
+        for line in proc.stdout:
+            log_lines.append(line.rstrip("\r\n"))
+            tail = "\n".join(log_lines[-200:])
+            log_box.code(tail or "…", language="bash")
+
+        ret = proc.wait()
+    except FileNotFoundError:
+        st.error("Could not execute playlist_creator.py. Check that it's in Scripts/ and Python is on PATH.")
+        return
+    except Exception as e:
+        st.error(f"Error while running Playlist Creator: {e}")
+        return
+
+    if ret == 0:
+        st.success("Playlist Creator finished successfully. Check Plex for the new playlist.")
+    else:
+        st.error(f"Playlist Creator exited with code {ret}. Review the log above.")
+
 def ui_compare_tab():
     from datetime import datetime
     try:
@@ -864,14 +1132,15 @@ def ui_compare_tab():
 # ---------------------------
 def main():
     st.title(APP_TITLE)
-    st.caption("Export music metadata, update metadata, and add to playlists and collections.")
+    st.caption("Export music metadata, update metadata, and build intelligent playlists.")
     cfg = ui_sidebar_config()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Export",
         "Update from CSV (Single Script)",
         "Update from CSV (Multiple Scripts)",
         "Compare Exported Metadata",
+        "Playlist Creator",
     ])
     with tab1:
         ui_export_tab(cfg)
@@ -881,6 +1150,9 @@ def main():
         ui_update_multi_tab(cfg)
     with tab4:
         ui_compare_tab()
+    with tab5:
+        ui_playlist_creator_tab(cfg)
+
 
 if __name__ == "__main__":
     main()

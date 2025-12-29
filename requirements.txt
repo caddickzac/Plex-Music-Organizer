@@ -1,3 +1,4 @@
 streamlit>=1.33
 pandas>=2.2
 plexapi>=4.15
+Pillow>=10.0

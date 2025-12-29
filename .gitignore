@@ -56,3 +56,6 @@ Old_DB files/2025_12_11 plex_music_exported_details.csv
 2025_12_26 plex_music_exported_details.csv
 Add_to_playlist.csv
 config.txt
+config.txt
+*.csv
+config.txt

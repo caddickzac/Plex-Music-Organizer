@@ -7,7 +7,7 @@ Reads Plex credentials from environment:
   PLEX_TOKEN   (preferred) or PLEX_API_TOKEN
 
 Per-track CSV:
-  - Always writes a dated file: "YYYY_MM_DD plex_music_exported_details.csv"
+  - Always writes a dated file: "YYYY_MM_DD Track_Level_Info.csv"
   - If OUTPUT_CSV is provided and differs, also writes/copies a compatibility copy there.
 
 Also writes:
@@ -42,7 +42,7 @@ if not PLEX_BASEURL or not PLEX_TOKEN:
 _date_prefix = datetime.now().strftime("%Y_%m_%d")
 
 # OUTPUT handling:
-# 1) Always write dated: YYYY_MM_DD plex_music_exported_details.csv
+# 1) Always write dated: YYYY_MM_DD Track_Level_Info.csv
 # 2) If env OUTPUT_CSV is set and is different, also copy the dated file there (compat)
 ENV_OUTPUT_CSV = os.environ.get("OUTPUT_CSV")  # may be None
 compat_output_csv = None
@@ -51,8 +51,13 @@ if ENV_OUTPUT_CSV:
     out_dir = os.path.dirname(os.path.abspath(ENV_OUTPUT_CSV)) or os.getcwd()
     base = os.path.basename(ENV_OUTPUT_CSV)
 
-    if ("plex_music_exported_details" in base.lower()) and (not base.startswith(_date_prefix)):
-        OUTPUT_CSV = os.path.join(out_dir, f"{_date_prefix} plex_music_exported_details.csv")
+    # normalize for case / spaces vs underscores
+    norm = base.lower().replace(" ", "_")
+
+    # If the caller asked for Track_Level_Info.* but without a date prefix,
+    # we create a dated file and (optionally) a compatibility copy.
+    if ("track_level_info" in norm) and (not base.startswith(_date_prefix)):
+        OUTPUT_CSV = os.path.join(out_dir, f"{_date_prefix} Track_Level_Info.csv")
         compat_output_csv = os.path.abspath(ENV_OUTPUT_CSV)
     else:
         # user explicitly wants a particular filename; honor it
@@ -60,8 +65,9 @@ if ENV_OUTPUT_CSV:
         compat_output_csv = None
 else:
     out_dir = os.getcwd()
-    OUTPUT_CSV = os.path.join(out_dir, f"{_date_prefix} plex_music_exported_details.csv")
+    OUTPUT_CSV = os.path.join(out_dir, f"{_date_prefix} Track_Level_Info.csv")
     compat_output_csv = None
+
 
 print(f"Connecting to Plex @ {PLEX_BASEURL} ...", flush=True)
 plex = PlexServer(PLEX_BASEURL, PLEX_TOKEN)
@@ -180,7 +186,7 @@ print(f"Scanning {len(artists)} artists ...", flush=True)
 # 2) Add Album_ID to track-level export
 header = [
     "Filename", "Title", "Track_Artist", "Album_Artist", "Album",
-    "Track_ID", "Media_ID", "Artist_ID", "Album_ID",
+    "Track_ID", "Artist_ID", "Album_ID", "Media_ID",
     "Track_Genres", "Album_Genres", "Artist_Genres",
     "Date", "Date_Cleaned", "Bitrate", "Duration",
     "Track #", "Disc #", "File Type", "File Size (MB)",
@@ -328,7 +334,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
 
                             row = [
                                 file_path, title, track_artist, album_artist, album_name,
-                                track_id, media_id, artist_id, album_id_track,
+                                track_id, artist_id, album_id_track, media_id, 
                                 track_genres, album_genres, artist_genres,
                                 date_str, date_cleaned, bitrate, duration_cleaned,
                                 track_num, disc_num, file_type, file_size_mb,
@@ -413,7 +419,7 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
 
 print(f"✅ Export complete: {total_written} tracks written to '{OUTPUT_CSV}'.", flush=True)
 
-# If Streamlit passed OUTPUT_CSV=plex_music_exported_details.csv, keep app compatibility:
+# If Streamlit passed OUTPUT_CSV=Track_Level_Info.csv, keep app compatibility:
 if compat_output_csv and os.path.abspath(OUTPUT_CSV) != os.path.abspath(compat_output_csv):
     try:
         shutil.copyfile(OUTPUT_CSV, compat_output_csv)
