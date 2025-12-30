@@ -1,23 +1,3 @@
-"""
-Plex Library Organizer — Streamlit App (scaffold v13)
-
-New in v13:
-- Keeps "Export", "Update from CSV (Single Script)", "Update from CSV (Multiple Scripts)",
-  and "Compare Exported Metadata" tabs.
-- "Playlist Creator" tab:
-  - Uses Scripts/playlist_creator.py
-  - Supports multiple seed structures (tracks, artists, playlists, collections, genres)
-  - Adds seed-mode selector:
-      A) Genre focus
-      B) History focus
-      C) Sonic Album Mix
-      D) Sonic Artist Mix
-      E) Sonic Albums + Artists
-      F) Album Echoes
-  - Adds explore–exploit slider and diversity weighting
-  - Toggles for using sonically similar albums / artists
-"""
-
 from __future__ import annotations
 import os
 import io
@@ -478,8 +458,17 @@ def ui_sidebar_config() -> AppConfig:
         st.session_state["token"] = file_cfg.plex_token
 
     st.sidebar.header("Configuration")
-    baseurl = st.sidebar.text_input("Plex URL", placeholder="http://http://127.0.0.1:32400", key="baseurl")
-    token = st.sidebar.text_input("Plex Token", type="password", placeholder="••••••••", key="token")
+    baseurl = st.sidebar.text_input(
+        "Plex URL",
+        placeholder="http://127.0.0.1:32400",
+        key="baseurl"
+    )
+    token = st.sidebar.text_input(
+        "Plex Token",
+        type="password",
+        placeholder="••••••••",
+        key="token"
+    )
 
     if (file_cfg.plex_baseurl or file_cfg.plex_token):
         st.sidebar.caption("Defaults loaded from config.txt")
@@ -619,6 +608,7 @@ def ui_update_multi_tab(cfg: AppConfig):
         checked = st.checkbox(
             label,
             value=(label in st.session_state["multi_selected_actions"]),
+
             key=f"multi_{label}"
         )
         if checked:
@@ -789,24 +779,36 @@ def ui_playlist_creator_tab(cfg: AppConfig):
 
     with col_b:
         sonic_similar_limit = st.number_input("Sonically similar per seed", min_value=5, max_value=100, value=20, step=1)
-        historical_ratio = st.slider("Historical ratio (fraction of tracks from history)", 0.0, 1.0, 0.3, 0.05)
+        historical_ratio = st.slider(
+            "Historical ratio (fraction of tracks from history)",
+            0.0,
+            1.0,
+            0.3,
+            0.05
+        )
         use_time_periods = st.checkbox("Use time-of-day periods", value=False)
 
     with col_c:
-        # Explore / exploit slider: 0 = explore, 1 = strongly exploit popular tracks
-        exploit_weight = st.slider(
-            "Explore ↔ Exploit (popularity bias)",
+        # Diversity slider → mapped to exploit_weight = 1 - diversity
+        diversity = st.slider(
+            "Diversity (more variety ←→ more consistency)",
             min_value=0.0,
             max_value=1.0,
-            value=0.7,
+            value=0.3,
             step=0.05,
-            help="0 = fully exploratory (more random), 1 = heavily favor most popular tracks on each album/artist."
+            help=(
+                "0 = very consistent / on-theme (strongly favor similar & popular tracks). "
+                "1 = highly varied / exploratory (roam more widely in sonic space)."
+            ),
         )
         seed_fallback_mode = st.radio(
             "When explicit seeds are too few, fill from:",
             options=["history", "genre"],
             index=0,
         )
+
+    # Map diversity → exploit_weight for the backend
+    exploit_weight = 1.0 - float(diversity)
 
     st.markdown("### Rating filters")
     st.caption("Minimum ratings (0–10, Plex's internal scale). Set to 0 to ignore a filter.")
@@ -821,10 +823,35 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         min_artist = st.number_input("Min artist rating", min_value=0, max_value=10, value=0, step=1)
     with r4:
         allow_unrated = st.checkbox(
-            "Allow unrated",
+            "Allow tracks with no rating",
             value=True,
-            help="If checked, tracks/albums/artists with no rating are allowed even when minimums are set."
+            help="If checked, tracks/albums/artists with userRating = None are allowed even when minimums are set."
         )
+
+    st.markdown("### Play count filters")
+    st.caption(
+        "Based on Plex viewCount (number of plays). "
+        "Use –1 to ignore a bound. Example: min=0, max=0 → only never-played tracks."
+    )
+
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        min_play_count = st.number_input(
+            "Min play count (–1 = no minimum)",
+            min_value=-1,
+            max_value=10000,
+            value=-1,
+            step=1,
+        )
+    with pc2:
+        max_play_count = st.number_input(
+            "Max play count (–1 = no maximum)",
+            min_value=-1,
+            max_value=10000,
+            value=-1,
+            step=1,
+        )
+
 
     st.divider()
     st.markdown("### Seed strategy")
@@ -965,6 +992,8 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "use_time_periods": 1 if use_time_periods else 0,
             "seed_fallback_mode": seed_fallback_mode.lower(),
             "seed_mode": seed_mode,
+            "min_play_count": int(min_play_count),
+            "max_play_count": int(max_play_count),
             # seed lists
             "seed_track_keys": seed_track_keys,
             "seed_artist_names": seed_artist_names,
@@ -973,6 +1002,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "genre_seeds": genre_seeds,
         },
     }
+
 
     try:
         proc = subprocess.Popen(

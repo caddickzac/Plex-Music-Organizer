@@ -186,6 +186,37 @@ def is_recently_played(
 
 
 # ---------------------------------------------------------------------------
+# Play count filter
+# ---------------------------------------------------------------------------
+
+def passes_playcount(
+    track: Track,
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+) -> bool:
+    """
+    Enforce inclusive bounds on Plex viewCount (play count).
+
+    - If min_play_count is not None, require viewCount >= min_play_count.
+    - If max_play_count is not None, require viewCount <= max_play_count.
+    - viewCount of None is treated as 0 (never played).
+    """
+    try:
+        vc = getattr(track, "viewCount", None)
+    except Exception:
+        vc = None
+
+    if vc is None:
+        vc = 0
+
+    if min_play_count is not None and vc < min_play_count:
+        return False
+    if max_play_count is not None and vc > max_play_count:
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Sonic similarity helpers (album / track / artist)
 # ---------------------------------------------------------------------------
 
@@ -455,7 +486,6 @@ def collect_seed_tracks_from_keys(
         except Exception as e:
             log_warning(f"Could not fetch seed track '{k}': {e}")
     return seeds
-
 
 
 def collect_seed_tracks_from_playlists(
@@ -804,6 +834,24 @@ def main() -> int:
     min_artist = int(min_rating.get("artist", 0))
 
     allow_unrated = bool(pl_cfg.get("allow_unrated", 1))
+
+    # Play count filters (–1 means "no bound")
+    raw_min_pc = pl_cfg.get("min_play_count", -1)
+    raw_max_pc = pl_cfg.get("max_play_count", -1)
+    try:
+        min_play_count = int(raw_min_pc)
+    except Exception:
+        min_play_count = -1
+    try:
+        max_play_count = int(raw_max_pc)
+    except Exception:
+        max_play_count = -1
+
+    if min_play_count < 0:
+        min_play_count = None
+    if max_play_count < 0:
+        max_play_count = None
+
     use_time_periods = bool(pl_cfg.get("use_time_periods", 0))
     seed_fallback_mode = (pl_cfg.get("seed_fallback_mode") or "history").lower()
 
@@ -875,6 +923,9 @@ def main() -> int:
         f"allow_unrated={allow_unrated}"
     )
     log_detail(
+        f"Play count filter → min={min_play_count}, max={max_play_count}"
+    )
+    log_detail(
         f"use_sonic_albums={use_sonic_albums}, "
         f"use_sonic_artists={use_sonic_artists}, "
         f"use_sonic_tracks={use_sonic_tracks}"
@@ -920,7 +971,7 @@ def main() -> int:
         exclude_days,
         use_time_periods,
     )
-    
+
     if seed_mode == "history":
         seed_tracks.extend(history_seeds)
     seed_source_counts["history"] += len(history_seeds)
@@ -1056,7 +1107,7 @@ def main() -> int:
     candidates.extend(seed_tracks)
 
     # ------------------------------------------------------------------
-    # Step 4: Filter, dedupe, rating filters, and cap max_tracks
+    # Step 4: Filter, dedupe, rating filters, play count, and cap max_tracks
     # ------------------------------------------------------------------
     log_status(50, "Filtering and deduplicating candidates...")
 
@@ -1073,6 +1124,8 @@ def main() -> int:
         if not passes_min_ratings(
             t, plex, min_track, min_album, min_artist, allow_unrated
         ):
+            continue
+        if not passes_playcount(t, min_play_count, max_play_count):
             continue
 
         filtered.append(t)
@@ -1109,6 +1162,8 @@ def main() -> int:
             if not passes_min_ratings(
                 t, plex, min_track, min_album, min_artist, allow_unrated
             ):
+                continue
+            if not passes_playcount(t, min_play_count, max_play_count):
                 continue
             cand_seen.add(rk)
             extra.append(t)
