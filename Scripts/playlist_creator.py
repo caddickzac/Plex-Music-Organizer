@@ -630,24 +630,50 @@ def collect_history_seeds(
     return history_tracks, excluded_keys
 
 
-def collect_genre_tracks(music_section, genres: List[str]) -> List[Track]:
+def collect_genre_tracks(
+    music_section,
+    plex: PlexServer,
+    genres: List[str],
+) -> List[Track]:
+    """
+    Collect genre seeds at the **album level**:
+      - searchAlbums(genre=...) in the music section
+      - take all tracks from those albums
+    """
     if not genres:
         return []
-    tracks: List[Track] = []
+
+    albums: List[Album] = []
+    seen_album_keys: Set[str] = set()
+
     for g in genres:
         try:
-            res = music_section.searchTracks(genre=g)
-            tracks.extend(res)
+            res = music_section.searchAlbums(genre=g)
         except Exception as e:
-            log_warning(f"Genre search failed for '{g}': {e}")
-    seen: Set[str] = set()
-    uniq: List[Track] = []
-    for t in tracks:
-        rk = getattr(t, "ratingKey", None)
-        if rk and rk not in seen:
-            seen.add(rk)
-            uniq.append(t)
-    return uniq
+            log_warning(f"Genre album search failed for '{g}': {e}")
+            continue
+        for a in res:
+            if not isinstance(a, Album):
+                continue
+            rk = getattr(a, "ratingKey", None)
+            if rk and rk not in seen_album_keys:
+                seen_album_keys.add(rk)
+                albums.append(a)
+
+    tracks: List[Track] = []
+    seen_track_keys: Set[str] = set()
+    for album in albums:
+        try:
+            for t in album.tracks():
+                rk = getattr(t, "ratingKey", None)
+                if rk and rk not in seen_track_keys:
+                    seen_track_keys.add(rk)
+                    tracks.append(t)
+        except Exception:
+            continue
+
+    return tracks
+
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +835,25 @@ def track_passes_static_filters(
         return False
 
     album = resolve_album(track, plex)
+
+    # Collections / genre excludes (album-level where possible)
+    coll_names: Set[str] = set()
+    genre_names: Set[str] = set()
+
+    if album is not None:
+        try:
+            coll_names |= _normalize_name_set(getattr(album, "collections", None))
+        except Exception:
+            pass
+        try:
+            genre_names |= {
+                str(g).strip().lower()
+                for g in (getattr(album, "genres", None) or [])
+                if str(g).strip()
+            }
+        except Exception:
+            pass
+
 
     # Year filter (album-level, using originallyAvailableAt.year → album.year)
     if (min_year is not None or max_year is not None) and album is not None:
@@ -1452,7 +1497,8 @@ def main() -> int:
     seed_source_counts["collections"] += len(coll_seeds)
 
     # Genre seeds (direct tracks in those genres)
-    genre_tracks = collect_genre_tracks(music_section, genre_seeds)
+    genre_tracks = collect_genre_tracks(music_section, plex, genre_seeds)
+    
     if seed_mode == "genre":
         seed_tracks.extend(genre_tracks)
     seed_source_counts["genres"] += len(genre_tracks)
