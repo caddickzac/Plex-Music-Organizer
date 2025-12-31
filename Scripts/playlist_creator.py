@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Playlist Creator — Sonic / History / Genre Mixer (album-level year & genre)
+Playlist Creator — Sonic / History / Genre Mixer (v3.1, filtered-first sampling)
 
 Reads JSON config from stdin, e.g.:
 
@@ -28,8 +28,9 @@ Reads JSON config from stdin, e.g.:
     "min_play_count": -1,
     "max_play_count": -1,
 
-    "history_min_rating": 0,
-    "history_max_play_count": -1,
+    "use_time_periods": 1,
+    "seed_fallback_mode": "history",
+    "seed_mode": "sonic_album_mix",
 
     "min_year": 0,
     "max_year": 0,
@@ -42,15 +43,17 @@ Reads JSON config from stdin, e.g.:
     "max_tracks_per_artist": 0,
     "max_tracks_per_album": 0,
 
+    "history_min_rating": 0,
+    "history_max_play_count": -1,
+
     "genre_strict": 1,
     "allow_off_genre_fraction": 0.2,
-    "exclude_genres": [],
+
     "include_collections": [],
     "exclude_collections": [],
+    "exclude_genres": [],
 
-    "use_time_periods": 1,
-    "seed_fallback_mode": "history",
-    "seed_mode": "sonic_album_mix",
+    "custom_title": "",
 
     "seed_track_keys": [],
     "seed_artist_names": [],
@@ -73,7 +76,6 @@ from typing import List, Dict, Optional, Set, Tuple
 from plexapi.server import PlexServer  # type: ignore
 from plexapi.audio import Track, Album, Artist  # type: ignore
 
-
 # ---------------------------------------------------------------------------
 # Simple logging / progress helpers
 # ---------------------------------------------------------------------------
@@ -82,10 +84,12 @@ BAR_LEN = 30
 
 
 def log(msg: str) -> None:
+    """Plain log line."""
     print(msg, flush=True)
 
 
 def log_status(percent: int, message: str) -> None:
+    """Progress bar style log line."""
     percent = max(0, min(100, percent))
     filled = int(BAR_LEN * percent // 100)
     bar = "=" * filled + "-" * (BAR_LEN - filled)
@@ -125,90 +129,7 @@ def period_hours(period: str, periods: Dict[str, List[int]]) -> List[int]:
 
 
 # ---------------------------------------------------------------------------
-# Helpers: album lookup, album year, album genres
-# ---------------------------------------------------------------------------
-
-def get_album_for_track(track: Track, plex: PlexServer) -> Optional[Album]:
-    """
-    Safely resolve the Album corresponding to this Track.
-    """
-    try:
-        if getattr(track, "parentRatingKey", None):
-            obj = plex.fetchItem(track.parentRatingKey)
-            if isinstance(obj, Album):
-                return obj
-        # fallback to track.album()
-        a = getattr(track, "album", None)
-        if callable(a):
-            obj2 = a()
-            if isinstance(obj2, Album):
-                return obj2
-    except Exception:
-        return None
-    return None
-
-
-def get_album_year_for_track(track: Track, plex: PlexServer) -> Optional[int]:
-    """
-    Year filter is **album-first**:
-      1) album.year
-      2) album.originallyAvailableAt.year
-      3) track.year
-      4) track.originallyAvailableAt.year
-    """
-    album = get_album_for_track(track, plex)
-    year = None
-
-    try:
-        if album is not None:
-            y = getattr(album, "year", None)
-            if y:
-                year = int(y)
-            else:
-                oa = getattr(album, "originallyAvailableAt", None)
-                if oa:
-                    year = int(oa.year)
-    except Exception:
-        year = None
-
-    if year is not None:
-        return year
-
-    # fallback to track-level if album missing
-    try:
-        y = getattr(track, "year", None)
-        if y:
-            return int(y)
-        oa = getattr(track, "originallyAvailableAt", None)
-        if oa:
-            return int(oa.year)
-    except Exception:
-        return None
-    return None
-
-
-def get_album_genres_for_track(track: Track, plex: PlexServer) -> List[str]:
-    """
-    All genre-based filters/searches use **album genres**.
-    Returns lowercased genre names.
-    """
-    album = get_album_for_track(track, plex)
-    if album is None:
-        return []
-    try:
-        genres = getattr(album, "genres", None) or []
-        out = []
-        for g in genres:
-            s = str(g).strip().lower()
-            if s:
-                out.append(s)
-        return out
-    except Exception:
-        return []
-
-
-# ---------------------------------------------------------------------------
-# Rating filters (with allow_unrated)
+# Rating / playcount / recency filters
 # ---------------------------------------------------------------------------
 
 def passes_min_ratings(
@@ -238,7 +159,13 @@ def passes_min_ratings(
 
         # Album rating
         if min_album > 0:
-            album = get_album_for_track(track, plex)
+            album = None
+            try:
+                if getattr(track, "parentRatingKey", None):
+                    album = plex.fetchItem(track.parentRatingKey)
+            except Exception:
+                album = None
+
             if album is not None:
                 ar = getattr(album, "userRating", None)
                 if ar is None and not allow_unrated:
@@ -273,6 +200,10 @@ def is_recently_played(
     exclude_days: int,
     excluded_keys: Set[str],
 ) -> bool:
+    """
+    Check recency using exclude_days and excluded_keys.
+    excluded_keys usually comes from history() within an exclude window.
+    """
     if exclude_days <= 0:
         return False
 
@@ -286,10 +217,6 @@ def is_recently_played(
     cutoff = datetime.now() - timedelta(days=exclude_days)
     return last_played >= cutoff
 
-
-# ---------------------------------------------------------------------------
-# Play count & duration & year filters
-# ---------------------------------------------------------------------------
 
 def passes_playcount(
     track: Track,
@@ -318,175 +245,18 @@ def passes_playcount(
     return True
 
 
-def passes_year_filter(
-    track: Track,
-    plex: PlexServer,
-    min_year: Optional[int],
-    max_year: Optional[int],
-) -> bool:
+def popularity_score(track: Track) -> float:
     """
-    Year filter based on **album-year** (with album-first logic).
-    If year cannot be determined, we do NOT reject the track purely on year.
+    Simple popularity proxy: ratingCount (Track_Popularity) if present,
+    else viewCount, else 0.
     """
-    if min_year is None and max_year is None:
-        return True
-
-    year = get_album_year_for_track(track, plex)
-    if year is None:
-        return True
-
-    if min_year is not None and year < min_year:
-        return False
-    if max_year is not None and year > max_year:
-        return False
-    return True
-
-
-def passes_duration_filter(
-    track: Track,
-    min_sec: Optional[int],
-    max_sec: Optional[int],
-) -> bool:
-    if min_sec is None and max_sec is None:
-        return True
     try:
-        dur_ms = getattr(track, "duration", None)
-        if dur_ms is None:
-            return True
-        dur_sec = dur_ms / 1000.0
-    except Exception:
-        return True
-
-    if min_sec is not None and dur_sec < min_sec:
-        return False
-    if max_sec is not None and dur_sec > max_sec:
-        return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Recency bias (recently added)
-# ---------------------------------------------------------------------------
-
-def recency_score(track: Track, recent_days: int) -> float:
-    """
-    0–1 recency score based on addedAt vs now. Only meaningful when recent_days > 0.
-    """
-    if recent_days <= 0:
-        return 0.0
-    try:
-        added = getattr(track, "addedAt", None)
-        if not added:
-            return 0.0
-        delta = datetime.now() - added
-        d = float(delta.days)
-        if d < 0:
-            return 1.0
-        if d >= recent_days:
-            return 0.0
-        return max(0.0, 1.0 - d / float(recent_days))
+        rc = getattr(track, "ratingCount", None)
+        if rc is None:
+            rc = getattr(track, "viewCount", 0) or 0
+        return float(rc or 0.0)
     except Exception:
         return 0.0
-
-
-# ---------------------------------------------------------------------------
-# Genre / collection constraints (album-level genres)
-# ---------------------------------------------------------------------------
-
-def album_collection_names(album: Optional[Album]) -> List[str]:
-    if album is None:
-        return []
-    try:
-        cols = getattr(album, "collections", None) or []
-        out = []
-        for c in cols:
-            s = getattr(c, "tag", None) or str(c)
-            s = s.strip()
-            if s:
-                out.append(s)
-        return out
-    except Exception:
-        return []
-
-
-def passes_collection_filters(
-    track: Track,
-    plex: PlexServer,
-    include_collections: List[str],
-    exclude_collections: List[str],
-) -> bool:
-    """
-    Collections are evaluated at the album level.
-    - include_collections: if non-empty, album must belong to at least one.
-    - exclude_collections: if album belongs to any, reject.
-    """
-    album = get_album_for_track(track, plex)
-    album_cols = album_collection_names(album)
-    album_cols_lower = [c.lower() for c in album_cols]
-
-    if exclude_collections:
-        for col in exclude_collections:
-            col_l = col.strip().lower()
-            if not col_l:
-                continue
-            if any(col_l == c or col_l in c for c in album_cols_lower):
-                return False
-
-    if include_collections:
-        ok = False
-        for col in include_collections:
-            col_l = col.strip().lower()
-            if not col_l:
-                continue
-            if any(col_l == c or col_l in c for c in album_cols_lower):
-                ok = True
-                break
-        if not ok:
-            return False
-
-    return True
-
-
-def track_is_in_seed_genres(
-    track: Track,
-    plex: PlexServer,
-    genre_seeds: List[str],
-) -> bool:
-    """
-    Check if track's **album genres** overlap (fuzzy) with any seed genre.
-    """
-    if not genre_seeds:
-        return True
-    album_genres = get_album_genres_for_track(track, plex)
-    if not album_genres:
-        return False
-    seeds = [g.strip().lower() for g in genre_seeds if g.strip()]
-    for g in album_genres:
-        for s in seeds:
-            if s in g:
-                return True
-    return False
-
-
-def track_has_excluded_genre(
-    track: Track,
-    plex: PlexServer,
-    exclude_genres: List[str],
-) -> bool:
-    """
-    Hard exclusion based on **album genres**.
-    """
-    if not exclude_genres:
-        return False
-    album_genres = get_album_genres_for_track(track, plex)
-    if not album_genres:
-        return False
-    ex = [g.strip().lower() for g in exclude_genres if g.strip()]
-    for g in album_genres:
-        for s in ex:
-            if s in g:
-                return True
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -543,21 +313,78 @@ def get_sonic_similar_artists(artist: Artist, limit: int) -> List[Artist]:
 
 
 # ---------------------------------------------------------------------------
-# Popularity scoring + album / artist track selection
+# Album / artist helpers
 # ---------------------------------------------------------------------------
 
-def popularity_score(track: Track) -> float:
-    """
-    Simple popularity proxy: ratingCount (Track_Popularity) if present,
-    else viewCount, else 0.
-    """
+def resolve_album(track: Track, plex: PlexServer) -> Optional[Album]:
     try:
-        rc = getattr(track, "ratingCount", None)
-        if rc is None:
-            rc = getattr(track, "viewCount", 0) or 0
-        return float(rc or 0.0)
+        if getattr(track, "parentRatingKey", None):
+            a = plex.fetchItem(track.parentRatingKey)
+        else:
+            a = track.album()
+        if isinstance(a, Album):
+            return a
     except Exception:
-        return 0.0
+        pass
+    return None
+
+
+def _album_year(album: Optional[Album]) -> Optional[int]:
+    """
+    Get album year, preferring originallyAvailableAt.year,
+    falling back to album.year (int).
+    """
+    if album is None:
+        return None
+    year_val: Optional[int] = None
+    try:
+        dt = getattr(album, "originallyAvailableAt", None)
+        if dt:
+            year_val = dt.year
+    except Exception:
+        year_val = None
+    if year_val is None:
+        try:
+            y2 = getattr(album, "year", None)
+            if isinstance(y2, int):
+                year_val = y2
+        except Exception:
+            year_val = None
+    return year_val
+
+
+def _normalize_name_set(objs) -> Set[str]:
+    out: Set[str] = set()
+    if not objs:
+        return out
+    for o in objs:
+        try:
+            name = str(o).strip()
+            if name:
+                out.add(name)
+        except Exception:
+            pass
+    return out
+
+
+def _album_collections_and_genres(album: Optional[Album]) -> Tuple[Set[str], Set[str]]:
+    coll_names: Set[str] = set()
+    genre_names: Set[str] = set()
+    if album is None:
+        return coll_names, genre_names
+    try:
+        coll_names |= _normalize_name_set(getattr(album, "collections", None))
+    except Exception:
+        pass
+    try:
+        genre_names |= {
+            str(g).strip().lower()
+            for g in (getattr(album, "genres", None) or [])
+            if str(g).strip()
+        }
+    except Exception:
+        pass
+    return coll_names, genre_names
 
 
 def pick_track_from_album(
@@ -569,11 +396,46 @@ def pick_track_from_album(
     min_artist: int,
     allow_unrated: bool,
     exclude_keys: Set[str],
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+    min_year: Optional[int],
+    max_year: Optional[int],
+    min_duration_sec: Optional[int],
+    max_duration_sec: Optional[int],
+    include_collections: Set[str],
+    exclude_collections: Set[str],
+    exclude_genres: Set[str],
 ) -> Optional[Track]:
     """
-    Pick a single track from an album using an explore/exploit mix
-    based on popularity_score and randomisation.
+    Pick a single track from an album using an explore/exploit mix.
+
+    IMPORTANT: This now applies the *static filters upfront* at the
+    album- and track-level (year, collections, genres, duration, playcount),
+    so that we don't sample from albums/tracks that will be rejected later.
     """
+    # Album-level year / collections / genres
+    year_val = _album_year(album)
+    if (min_year is not None or max_year is not None) and year_val is not None:
+        if min_year is not None and year_val < min_year:
+            return None
+        if max_year is not None and year_val > max_year:
+            return None
+
+    coll_names, genre_names = _album_collections_and_genres(album)
+
+    # Include collections: only enforce if list is non-empty
+    if include_collections:
+        if not coll_names.intersection(include_collections):
+            return None
+
+    # Exclude collections
+    if exclude_collections and coll_names.intersection(exclude_collections):
+        return None
+
+    # Exclude genres
+    if exclude_genres and genre_names.intersection(exclude_genres):
+        return None
+
     try:
         tracks = album.tracks()
     except Exception:
@@ -581,21 +443,51 @@ def pick_track_from_album(
 
     candidates: List[Track] = []
     for t in tracks:
-        if getattr(t, "ratingKey", None) in exclude_keys:
+        rk = getattr(t, "ratingKey", None)
+        if not rk or rk in exclude_keys:
             continue
+
         if not passes_min_ratings(t, plex, min_track, min_album, min_artist, allow_unrated):
             continue
+
+        if not passes_playcount(t, min_play_count, max_play_count):
+            continue
+
+        # Duration filter (track-level, seconds)
+        if min_duration_sec is not None or max_duration_sec is not None:
+            dur_ms = getattr(t, "duration", None)
+            if dur_ms is not None:
+                dur_sec = int(dur_ms // 1000)
+                if min_duration_sec is not None and dur_sec < min_duration_sec:
+                    continue
+                if max_duration_sec is not None and dur_sec > max_duration_sec:
+                    continue
+
+        # Optional: track-level genre excludes (mostly redundant with album-level)
+        try:
+            t_genres = {
+                str(g).strip().lower()
+                for g in (getattr(t, "genres", None) or [])
+                if str(g).strip()
+            }
+        except Exception:
+            t_genres = set()
+
+        if exclude_genres and t_genres.intersection(exclude_genres):
+            continue
+
         candidates.append(t)
 
     if not candidates:
         return None
 
     ordered = sorted(candidates, key=popularity_score, reverse=True)
+    exploit_weight = max(0.0, min(1.0, exploit_weight))
 
     r = random.random()
     if r < exploit_weight:
         # top-k slice
-        k = max(1, min(5, len(ordered) // 3))
+        k = max(1, min(5, max(1, len(ordered) // 3)))
         choice = random.choice(ordered[:k])
         mode = "exploit"
     else:
@@ -620,6 +512,15 @@ def pick_track_from_artist(
     min_artist: int,
     allow_unrated: bool,
     exclude_keys: Set[str],
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+    min_year: Optional[int],
+    max_year: Optional[int],
+    min_duration_sec: Optional[int],
+    max_duration_sec: Optional[int],
+    include_collections: Set[str],
+    exclude_collections: Set[str],
+    exclude_genres: Set[str],
 ) -> Optional[Track]:
     try:
         albums = artist.albums()
@@ -632,10 +533,23 @@ def pick_track_from_artist(
 
     for album in albums:
         t = pick_track_from_album(
-            album, plex, exploit_weight,
-            min_track, min_album, min_artist,
+            album,
+            plex,
+            exploit_weight,
+            min_track,
+            min_album,
+            min_artist,
             allow_unrated,
             exclude_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         if t is not None:
             return t
@@ -670,6 +584,7 @@ def collect_history_seeds(
     else:
         hours = set(range(0, 24))
 
+    # Raw history entries (TrackHistory objects)
     history_entries = [
         entry for entry in music_section.history(mindate=history_start)
         if entry.viewedAt and entry.viewedAt.hour in hours
@@ -683,19 +598,22 @@ def collect_history_seeds(
 
     history_tracks: List[Track] = []
     for entry in history_entries:
+        if entry.ratingKey in excluded_keys:
+            continue
         try:
             item = plex.fetchItem(entry.ratingKey)
             if not isinstance(item, Track):
                 continue
 
-            # apply history_min_rating/history_max_play_count at seed stage
+            # Optional history-only filters
             if history_min_rating > 0:
-                tr = getattr(item, "userRating", None)
-                if tr is None or tr < history_min_rating:
+                r = getattr(item, "userRating", None)
+                if r is None or r < history_min_rating:
                     continue
+
             if history_max_play_count is not None:
-                vc = getattr(item, "viewCount", None) or 0
-                if vc > history_max_play_count:
+                vc = getattr(item, "viewCount", None)
+                if vc is not None and vc > history_max_play_count:
                     continue
 
             history_tracks.append(item)
@@ -712,48 +630,24 @@ def collect_history_seeds(
     return history_tracks, excluded_keys
 
 
-def collect_genre_tracks(
-    music_section,
-    plex: PlexServer,
-    genres: List[str],
-) -> List[Track]:
-    """
-    Collect genre seeds at the **album level**:
-      - searchAlbums(genre=...) in the music section
-      - take all tracks from those albums
-    """
+def collect_genre_tracks(music_section, genres: List[str]) -> List[Track]:
     if not genres:
         return []
-    albums: List[Album] = []
-    seen_album_keys: Set[str] = set()
-
+    tracks: List[Track] = []
     for g in genres:
         try:
-            res = music_section.searchAlbums(genre=g)
+            res = music_section.searchTracks(genre=g)
+            tracks.extend(res)
         except Exception as e:
-            log_warning(f"Genre album search failed for '{g}': {e}")
-            continue
-        for a in res:
-            if not isinstance(a, Album):
-                continue
-            rk = getattr(a, "ratingKey", None)
-            if rk and rk not in seen_album_keys:
-                seen_album_keys.add(rk)
-                albums.append(a)
-
-    tracks: List[Track] = []
-    seen_track_keys: Set[str] = set()
-    for album in albums:
-        try:
-            for t in album.tracks():
-                rk = getattr(t, "ratingKey", None)
-                if rk and rk not in seen_track_keys:
-                    seen_track_keys.add(rk)
-                    tracks.append(t)
-        except Exception:
-            continue
-
-    return tracks
+            log_warning(f"Genre search failed for '{g}': {e}")
+    seen: Set[str] = set()
+    uniq: List[Track] = []
+    for t in tracks:
+        rk = getattr(t, "ratingKey", None)
+        if rk and rk not in seen:
+            seen.add(rk)
+            uniq.append(t)
+    return uniq
 
 
 # ---------------------------------------------------------------------------
@@ -778,8 +672,10 @@ def collect_seed_tracks_from_keys(
 
         try:
             if k.isdigit():
+                # Treat as ratingKey
                 item = plex.fetchItem(f"/library/metadata/{k}")
             else:
+                # Allow full keys like "/library/metadata/12345"
                 item = plex.fetchItem(k)
 
             if isinstance(item, Track):
@@ -859,7 +755,125 @@ def collect_seed_artists(music_section, artist_names: List[str]) -> List[Artist]
 
 
 # ---------------------------------------------------------------------------
-# Sonic expansion strategies
+# Domain / static filter helper (used early and late)
+# ---------------------------------------------------------------------------
+
+def track_passes_static_filters(
+    track: Track,
+    plex: PlexServer,
+    cand_seen: Set[str],
+    excluded_keys: Set[str],   # kept for signature compatibility, recency handled outside
+    min_track: int,
+    min_album: int,
+    min_artist: int,
+    allow_unrated: bool,
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+    min_year: Optional[int],
+    max_year: Optional[int],
+    min_duration_sec: Optional[int],
+    max_duration_sec: Optional[int],
+    include_collections: Set[str],
+    exclude_collections: Set[str],
+    exclude_genres: Set[str],
+    reject_reasons: Counter,
+) -> bool:
+    """
+    Core static filters applied near the end of the pipeline:
+    - dedupe
+    - rating
+    - playcount
+    - album-based year
+    - track duration
+    - album/track collections & genres vs include/exclude lists
+
+    NOTE: recency (exclude_played_days) is applied separately in _try_add_candidate.
+    """
+    rk = getattr(track, "ratingKey", None)
+    if not rk:
+        reject_reasons["no_ratingKey"] += 1
+        return False
+    if rk in cand_seen:
+        reject_reasons["duplicate"] += 1
+        return False
+    cand_seen.add(rk)
+
+    # Ratings
+    if not passes_min_ratings(track, plex, min_track, min_album, min_artist, allow_unrated):
+        reject_reasons["min_ratings"] += 1
+        return False
+
+    # Playcount
+    if not passes_playcount(track, min_play_count, max_play_count):
+        reject_reasons["play_count"] += 1
+        return False
+
+    album = resolve_album(track, plex)
+
+    # Year filter (album-level, using originallyAvailableAt.year → album.year)
+    if (min_year is not None or max_year is not None) and album is not None:
+        year_val = _album_year(album)
+        if year_val is not None:
+            if min_year is not None and year_val < min_year:
+                reject_reasons["year"] += 1
+                return False
+            if max_year is not None and year_val > max_year:
+                reject_reasons["year"] += 1
+                return False
+
+    # Duration filter (track-level, seconds)
+    if min_duration_sec is not None or max_duration_sec is not None:
+        dur_ms = getattr(track, "duration", None)
+        if dur_ms is not None:
+            dur_sec = int(dur_ms // 1000)
+            if min_duration_sec is not None and dur_sec < min_duration_sec:
+                reject_reasons["duration"] += 1
+                return False
+            if max_duration_sec is not None and dur_sec > max_duration_sec:
+                reject_reasons["duration"] += 1
+                return False
+
+    # Collections / genre excludes (album-level where possible + track-level)
+    coll_names: Set[str] = set()
+    genre_names: Set[str] = set()
+
+    for obj in (album, track):
+        if obj is None:
+            continue
+        try:
+            coll_names |= _normalize_name_set(getattr(obj, "collections", None))
+        except Exception:
+            pass
+        try:
+            genre_names |= {
+                str(g).strip().lower()
+                for g in (getattr(obj, "genres", None) or [])
+                if str(g).strip()
+            }
+        except Exception:
+            pass
+
+    # Include collections: only enforce if list is non-empty
+    if include_collections:
+        if not coll_names.intersection(include_collections):
+            reject_reasons["collections"] += 1
+            return False
+
+    # Exclude collections
+    if exclude_collections and coll_names.intersection(exclude_collections):
+        reject_reasons["collections"] += 1
+        return False
+
+    # Exclude genres
+    if exclude_genres and genre_names.intersection(exclude_genres):
+        reject_reasons["genre_exclude"] += 1
+        return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Sonic expansion strategies (now static-filter aware)
 # ---------------------------------------------------------------------------
 
 def expand_via_sonic_albums(
@@ -872,17 +886,26 @@ def expand_via_sonic_albums(
     min_artist: int,
     allow_unrated: bool,
     exclude_keys: Set[str],
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+    min_year: Optional[int],
+    max_year: Optional[int],
+    min_duration_sec: Optional[int],
+    max_duration_sec: Optional[int],
+    include_collections: Set[str],
+    exclude_collections: Set[str],
+    exclude_genres: Set[str],
 ) -> List[Track]:
     # collect unique seed albums
     albums: List[Album] = []
     seen_albums: Set[str] = set()
     for t in seed_tracks:
-        album = get_album_for_track(t, plex)
-        if isinstance(album, Album):
-            ak = getattr(album, "ratingKey", None)
+        a = resolve_album(t, plex)
+        if isinstance(a, Album):
+            ak = getattr(a, "ratingKey", None)
             if ak and ak not in seen_albums:
                 seen_albums.add(ak)
-                albums.append(album)
+                albums.append(a)
 
     log_detail(f"Sonic albums: unique seed albums = {len(albums)}")
 
@@ -907,10 +930,23 @@ def expand_via_sonic_albums(
     results: List[Track] = []
     for album in expanded_albums:
         t = pick_track_from_album(
-            album, plex, exploit_weight,
-            min_track, min_album, min_artist,
+            album,
+            plex,
+            exploit_weight,
+            min_track,
+            min_album,
+            min_artist,
             allow_unrated,
             exclude_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         if t is not None:
             results.append(t)
@@ -923,12 +959,21 @@ def expand_via_sonic_tracks(
     seed_tracks: List[Track],
     plex: PlexServer,
     sonic_limit: int,
-    exploit_weight: float,
+    exploit_weight: float,   # kept for signature parity; not used here currently
     min_track: int,
     min_album: int,
     min_artist: int,
     allow_unrated: bool,
     exclude_keys: Set[str],
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+    min_year: Optional[int],
+    max_year: Optional[int],
+    min_duration_sec: Optional[int],
+    max_duration_sec: Optional[int],
+    include_collections: Set[str],
+    exclude_collections: Set[str],
+    exclude_genres: Set[str],
 ) -> List[Track]:
     results: List[Track] = []
     for t in seed_tracks:
@@ -936,13 +981,58 @@ def expand_via_sonic_tracks(
         for s in sims:
             if not isinstance(s, Track):
                 continue
-            if getattr(s, "ratingKey", None) in exclude_keys:
+            rk = getattr(s, "ratingKey", None)
+            if not rk or rk in exclude_keys:
                 continue
+
             if not passes_min_ratings(
                 s, plex, min_track, min_album, min_artist, allow_unrated
             ):
                 continue
+
+            if not passes_playcount(s, min_play_count, max_play_count):
+                continue
+
+            album = resolve_album(s, plex)
+            year_val = _album_year(album)
+            if (min_year is not None or max_year is not None) and year_val is not None:
+                if min_year is not None and year_val < min_year:
+                    continue
+                if max_year is not None and year_val > max_year:
+                    continue
+
+            # Collections / genres
+            coll_names, album_genres = _album_collections_and_genres(album)
+            if include_collections and not coll_names.intersection(include_collections):
+                continue
+            if exclude_collections and coll_names.intersection(exclude_collections):
+                continue
+
+            try:
+                track_genres = {
+                    str(g).strip().lower()
+                    for g in (getattr(s, "genres", None) or [])
+                    if str(g).strip()
+                }
+            except Exception:
+                track_genres = set()
+
+            all_genres = album_genres.union(track_genres)
+            if exclude_genres and all_genres.intersection(exclude_genres):
+                continue
+
+            # Duration
+            if min_duration_sec is not None or max_duration_sec is not None:
+                dur_ms = getattr(s, "duration", None)
+                if dur_ms is not None:
+                    dur_sec = int(dur_ms // 1000)
+                    if min_duration_sec is not None and dur_sec < min_duration_sec:
+                        continue
+                    if max_duration_sec is not None and dur_sec > max_duration_sec:
+                        continue
+
             results.append(s)
+
     log_detail(f"Sonic tracks → picked tracks: {len(results)}")
     return results
 
@@ -957,6 +1047,15 @@ def expand_via_sonic_artists(
     min_artist: int,
     allow_unrated: bool,
     exclude_keys: Set[str],
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+    min_year: Optional[int],
+    max_year: Optional[int],
+    min_duration_sec: Optional[int],
+    max_duration_sec: Optional[int],
+    include_collections: Set[str],
+    exclude_collections: Set[str],
+    exclude_genres: Set[str],
 ) -> List[Track]:
     artists: List[Artist] = list(seed_artists)
     seen: Set[str] = set()
@@ -983,10 +1082,23 @@ def expand_via_sonic_artists(
     results: List[Track] = []
     for artist in artists:
         t = pick_track_from_artist(
-            artist, plex, exploit_weight,
-            min_track, min_album, min_artist,
+            artist,
+            plex,
+            exploit_weight,
+            min_track,
+            min_album,
+            min_artist,
             allow_unrated,
             exclude_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         if t is not None:
             results.append(t)
@@ -1004,26 +1116,48 @@ def expand_album_echoes(
     min_artist: int,
     allow_unrated: bool,
     exclude_keys: Set[str],
+    min_play_count: Optional[int],
+    max_play_count: Optional[int],
+    min_year: Optional[int],
+    max_year: Optional[int],
+    min_duration_sec: Optional[int],
+    max_duration_sec: Optional[int],
+    include_collections: Set[str],
+    exclude_collections: Set[str],
+    exclude_genres: Set[str],
 ) -> List[Track]:
     albums: List[Album] = []
     seen: Set[str] = set()
     for t in seed_tracks:
-        album = get_album_for_track(t, plex)
-        if isinstance(album, Album):
-            rk = getattr(album, "ratingKey", None)
+        a = resolve_album(t, plex)
+        if isinstance(a, Album):
+            rk = getattr(a, "ratingKey", None)
             if rk and rk not in seen:
                 seen.add(rk)
-                albums.append(album)
+                albums.append(a)
 
     log_detail(f"Album echoes: unique albums = {len(albums)}")
 
     results: List[Track] = []
     for album in albums:
         t = pick_track_from_album(
-            album, plex, exploit_weight,
-            min_track, min_album, min_artist,
+            album,
+            plex,
+            exploit_weight,
+            min_track,
+            min_album,
+            min_artist,
             allow_unrated,
             exclude_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         if t is not None:
             results.append(t)
@@ -1049,7 +1183,20 @@ def seed_mode_label(seed_mode: str) -> str:
     return mapping.get(seed_mode, seed_mode or "Mix")
 
 
-def build_playlist_title(seed_mode: str, period: str) -> str:
+def build_playlist_title(
+    seed_mode: str,
+    period: str,
+    custom_title: Optional[str] = None
+) -> str:
+    """
+    If custom_title is provided and non-empty, use it verbatim.
+    Otherwise fall back to the automatic seed-mode / day-based title.
+    """
+    if custom_title:
+        t = custom_title.strip()
+        if t:
+            return t
+
     today = datetime.now()
     day_name = today.strftime("%A")
     date_str = today.strftime("%y-%m-%d")
@@ -1114,81 +1261,39 @@ def main() -> int:
         log("ERROR: Missing plex.url or plex.token in payload.")
         return 2
 
+    # Basic playlist controls
     exclude_days = int(pl_cfg.get("exclude_played_days", 3))
     lookback_days = int(pl_cfg.get("history_lookback_days", 30))
     max_tracks = int(pl_cfg.get("max_tracks", 50))
     sonic_limit = int(pl_cfg.get("sonic_similar_limit", 20))
     historical_ratio = float(pl_cfg.get("historical_ratio", 0.3))
-    exploit_weight = float(pl_cfg.get("exploit_weight", 0.7))  # optional
+    exploit_weight = float(pl_cfg.get("exploit_weight", 0.7))  # popularity explore/exploit
 
     min_rating = pl_cfg.get("min_rating", {}) or {}
     min_track = int(min_rating.get("track", 0))
     min_album = int(min_rating.get("album", 0))
     min_artist = int(min_rating.get("artist", 0))
-
     allow_unrated = bool(pl_cfg.get("allow_unrated", 1))
 
     # Play count filters (–1 means "no bound")
-    raw_min_pc = pl_cfg.get("min_play_count", -1)
-    raw_max_pc = pl_cfg.get("max_play_count", -1)
-    try:
-        min_play_count = int(raw_min_pc)
-    except Exception:
-        min_play_count = -1
-    try:
-        max_play_count = int(raw_max_pc)
-    except Exception:
-        max_play_count = -1
-
-    if min_play_count < 0:
-        min_play_count = None
-    if max_play_count < 0:
-        max_play_count = None
-
-    # History filters
-    history_min_rating = int(pl_cfg.get("history_min_rating", 0))
-    raw_hist_max_pc = pl_cfg.get("history_max_play_count", -1)
-    try:
-        history_max_play_count = int(raw_hist_max_pc)
-    except Exception:
-        history_max_play_count = -1
-    if history_max_play_count < 0:
-        history_max_play_count = None
-
-    # Era / year filter (album-level)
-    def _to_year(v):
+    def _parse_optional_int(val, zero_means_none: bool = False, default_none: bool = True) -> Optional[int]:
+        """
+        Parse an int-like value where negative always means 'no bound'.
+        If zero_means_none=True, then 0 also becomes None.
+        """
         try:
-            v_int = int(v)
-            return v_int if v_int > 0 else None
+            iv = int(val)
         except Exception:
+            return None if default_none else 0
+
+        if iv < 0:
             return None
-
-    min_year = _to_year(pl_cfg.get("min_year", 0))
-    max_year = _to_year(pl_cfg.get("max_year", 0))
-
-    # Duration filter (seconds)
-    def _to_sec(v):
-        try:
-            v_int = int(v)
-            return v_int if v_int > 0 else None
-        except Exception:
+        if zero_means_none and iv == 0:
             return None
+        return iv
 
-    min_duration_sec = _to_sec(pl_cfg.get("min_duration_sec", 0))
-    max_duration_sec = _to_sec(pl_cfg.get("max_duration_sec", 0))
-
-    # Recency bias
-    recently_added_days = int(pl_cfg.get("recently_added_days", 0))
-    recently_added_weight = float(pl_cfg.get("recently_added_weight", 0.0))
-
-    # Artist / album diversity caps
-    max_tracks_per_artist = int(pl_cfg.get("max_tracks_per_artist", 0))
-    max_tracks_per_album = int(pl_cfg.get("max_tracks_per_album", 0))
-
-    if max_tracks_per_artist <= 0:
-        max_tracks_per_artist = None  # type: ignore[assignment]
-    if max_tracks_per_album <= 0:
-        max_tracks_per_album = None  # type: ignore[assignment]
+    min_play_count = _parse_optional_int(pl_cfg.get("min_play_count", -1), zero_means_none=False)
+    max_play_count = _parse_optional_int(pl_cfg.get("max_play_count", -1), zero_means_none=False)
 
     use_time_periods = bool(pl_cfg.get("use_time_periods", 0))
     seed_fallback_mode = (pl_cfg.get("seed_fallback_mode") or "history").lower()
@@ -1197,16 +1302,38 @@ def main() -> int:
     seed_artist_names = list(pl_cfg.get("seed_artist_names", []) or [])
     seed_playlist_names = list(pl_cfg.get("seed_playlist_names", []) or [])
     seed_collection_names = list(pl_cfg.get("seed_collection_names", []) or [])
-    genre_seeds = list(pl_cfg.get("genre_seeds", []) or [])
+    genre_seeds = [str(g).strip() for g in (pl_cfg.get("genre_seeds", []) or []) if str(g).strip()]
 
-    # Genre strict / exclusions
+    seed_mode = (pl_cfg.get("seed_mode") or "").strip().lower()
+    custom_title = (pl_cfg.get("custom_title") or "").strip()
+
+    # Era & duration filters (album-based year)
+    min_year = _parse_optional_int(pl_cfg.get("min_year", 0), zero_means_none=True)
+    max_year = _parse_optional_int(pl_cfg.get("max_year", 0), zero_means_none=True)
+    min_duration_sec = _parse_optional_int(pl_cfg.get("min_duration_sec", 0), zero_means_none=True)
+    max_duration_sec = _parse_optional_int(pl_cfg.get("max_duration_sec", 0), zero_means_none=True)
+
+    # Recency bias
+    recently_added_days = int(pl_cfg.get("recently_added_days", 0))
+    recently_added_weight = float(pl_cfg.get("recently_added_weight", 0.0))
+    recently_added_weight = max(0.0, min(1.0, recently_added_weight))
+
+    # Artist / album diversity caps (0 = no cap)
+    max_tracks_per_artist = _parse_optional_int(pl_cfg.get("max_tracks_per_artist", 0))
+    max_tracks_per_album = _parse_optional_int(pl_cfg.get("max_tracks_per_album", 0))
+
+    # History-specific filters
+    history_min_rating = int(pl_cfg.get("history_min_rating", 0))
+    history_max_play_count = _parse_optional_int(pl_cfg.get("history_max_play_count", -1))
+
+    # Genre strictness & collection constraints
     genre_strict = bool(pl_cfg.get("genre_strict", 0))
     allow_off_genre_fraction = float(pl_cfg.get("allow_off_genre_fraction", 0.2))
-    exclude_genres = list(pl_cfg.get("exclude_genres", []) or [])
-    include_collections = list(pl_cfg.get("include_collections", []) or [])
-    exclude_collections = list(pl_cfg.get("exclude_collections", []) or [])
+    allow_off_genre_fraction = max(0.0, min(1.0, allow_off_genre_fraction))
 
-    seed_mode = (pl_cfg.get("seed_mode") or "").strip()
+    include_collections = {str(x).strip() for x in (pl_cfg.get("include_collections", []) or []) if str(x).strip()}
+    exclude_collections = {str(x).strip() for x in (pl_cfg.get("exclude_collections", []) or []) if str(x).strip()}
+    exclude_genres = {str(x).strip().lower() for x in (pl_cfg.get("exclude_genres", []) or []) if str(x).strip()}
 
     log_status(0, "Starting Playlist Creator...")
 
@@ -1239,8 +1366,6 @@ def main() -> int:
             seed_mode = "genre"
         else:
             seed_mode = "history"
-    else:
-        seed_mode = seed_mode.lower()
 
     if seed_mode == "sonic_album_mix":
         use_sonic_albums = True
@@ -1252,6 +1377,7 @@ def main() -> int:
     elif seed_mode == "track_sonic":
         use_sonic_tracks = True
     elif seed_mode in ("album_echoes", "history", "genre"):
+        # uses albums only / pure history / pure genre
         pass
     else:
         log_warning(
@@ -1269,7 +1395,7 @@ def main() -> int:
         f"Play count filter → min={min_play_count}, max={max_play_count}"
     )
     log_detail(
-        f"Year filter → min_year={min_year}, max_year={max_year}"
+        f"Year filter (album-level) → min_year={min_year}, max_year={max_year}"
     )
     log_detail(
         f"Duration filter → min_sec={min_duration_sec}, max_sec={max_duration_sec}"
@@ -1290,8 +1416,9 @@ def main() -> int:
         f"genre_seeds={genre_seeds}"
     )
     log_detail(
-        f"Include collections={include_collections}, exclude_collections={exclude_collections}, "
-        f"exclude_genres={exclude_genres}"
+        f"Include collections={list(include_collections)}, "
+        f"exclude_collections={list(exclude_collections)}, "
+        f"exclude_genres={list(exclude_genres)}"
     )
     log_detail(
         f"use_sonic_albums={use_sonic_albums}, "
@@ -1324,13 +1451,13 @@ def main() -> int:
     seed_tracks.extend(coll_seeds)
     seed_source_counts["collections"] += len(coll_seeds)
 
-    # Genre seeds (album-level)
-    genre_tracks = collect_genre_tracks(music_section, plex, genre_seeds)
+    # Genre seeds (direct tracks in those genres)
+    genre_tracks = collect_genre_tracks(music_section, genre_seeds)
     if seed_mode == "genre":
         seed_tracks.extend(genre_tracks)
     seed_source_counts["genres"] += len(genre_tracks)
 
-    # History seeds
+    # History seeds (if seed_mode uses history as seeds, or for fallback)
     history_seeds, excluded_keys = collect_history_seeds(
         plex,
         music_section,
@@ -1374,7 +1501,8 @@ def main() -> int:
         )
 
     # ------------------------------------------------------------------
-    # Step 2: Fallback if very few seeds
+    # Step 2: If we have very few explicit seeds, optionally fall back
+    #         to history or genre for additional seeds.
     # ------------------------------------------------------------------
     MIN_SEEDS = 10
     if len(seed_tracks) < MIN_SEEDS:
@@ -1396,7 +1524,9 @@ def main() -> int:
                     seed_tracks.append(t)
 
     # ------------------------------------------------------------------
-    # Step 3: Expand from seeds via sonic / echoes / genre / history mix
+    # Step 3: Expand from seeds via sonic / echoes / genre balancing
+    #         (now with album-year / collections / duration filters
+    #          applied INSIDE the expansion functions).
     # ------------------------------------------------------------------
     log_status(35, "Expanding from seeds...")
 
@@ -1414,6 +1544,15 @@ def main() -> int:
             min_artist,
             allow_unrated,
             excluded_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         candidates.extend(sonic_album_tracks)
 
@@ -1429,6 +1568,15 @@ def main() -> int:
             min_artist,
             allow_unrated,
             excluded_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         candidates.extend(sonic_artist_tracks)
 
@@ -1444,6 +1592,15 @@ def main() -> int:
             min_artist,
             allow_unrated,
             excluded_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         candidates.extend(sonic_track_tracks)
 
@@ -1458,6 +1615,15 @@ def main() -> int:
             min_artist,
             allow_unrated,
             excluded_keys,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
         )
         candidates.extend(echoes)
 
@@ -1476,49 +1642,61 @@ def main() -> int:
     candidates.extend(seed_tracks)
 
     # ------------------------------------------------------------------
-    # Step 4: Filter, dedupe, rating filters, play count, year/genre, etc.
+    # Step 4: Static filters (dedupe, ratings, playcount, year, duration,
+    #         collections, genre-excludes) + fallback if underfilled
+    #
+    # NOTE: Many of these constraints have already been applied inside the
+    #       sonic expansion functions. This step is now primarily a safety
+    #       check + dedupe + recency.
     # ------------------------------------------------------------------
     log_status(50, "Filtering and deduplicating candidates...")
 
     cand_seen: Set[str] = set()
     filtered: List[Track] = []
-    rejected_counts = defaultdict(int)
+    reject_reasons: Counter = Counter()
+
+    # Helper for static filtering so we can reuse for fallbacks
+    def _try_add_candidate(t: Track) -> None:
+        # Recency check (exclude_played_days)
+        if is_recently_played(t, exclude_days, excluded_keys):
+            reject_reasons["recently_played"] += 1
+            return
+
+        if track_passes_static_filters(
+            t,
+            plex,
+            cand_seen,
+            excluded_keys,
+            min_track,
+            min_album,
+            min_artist,
+            allow_unrated,
+            min_play_count,
+            max_play_count,
+            min_year,
+            max_year,
+            min_duration_sec,
+            max_duration_sec,
+            include_collections,
+            exclude_collections,
+            exclude_genres,
+            reject_reasons,
+        ):
+            filtered.append(t)
 
     for t in candidates:
-        rk = getattr(t, "ratingKey", None)
-        if not rk or rk in cand_seen:
-            continue
-        cand_seen.add(rk)
-
-        if is_recently_played(t, exclude_days, excluded_keys):
-            rejected_counts["recently_played"] += 1
-            continue
-        if not passes_min_ratings(
-            t, plex, min_track, min_album, min_artist, allow_unrated
-        ):
-            rejected_counts["min_ratings"] += 1
-            continue
-        if not passes_playcount(t, min_play_count, max_play_count):
-            rejected_counts["playcount"] += 1
-            continue
-        if not passes_year_filter(t, plex, min_year, max_year):
-            rejected_counts["year"] += 1
-            continue
-        if not passes_duration_filter(t, min_duration_sec, max_duration_sec):
-            rejected_counts["duration"] += 1
-            continue
-        if not passes_collection_filters(t, plex, include_collections, exclude_collections):
-            rejected_counts["collections"] += 1
-            continue
-        if track_has_excluded_genre(t, plex, exclude_genres):
-            rejected_counts["exclude_genres"] += 1
-            continue
-
-        filtered.append(t)
+        _try_add_candidate(t)
 
     log_detail(f"Candidates after dedupe & filters: {len(filtered)}")
-    if rejected_counts:
-        log_detail(f"Rejected counts by reason: {dict(rejected_counts)}")
+    if reject_reasons:
+        log_detail(f"Rejected counts by reason: {dict(reject_reasons)}")
+
+    if filtered:
+        names = [t.title for t in filtered[:25]]
+        log_detail(
+            "Candidate tracks after static filters (showing up to 25): "
+            + ", ".join(names)
+        )
 
     # If still underfilled, fall back again to history / genre
     if len(filtered) < max_tracks:
@@ -1533,34 +1711,9 @@ def main() -> int:
         else:
             fb_tracks = []
 
-        extra: List[Track] = []
         for t in fb_tracks:
-            rk = getattr(t, "ratingKey", None)
-            if not rk or rk in cand_seen:
-                continue
-            if is_recently_played(t, exclude_days, excluded_keys):
-                continue
-            if not passes_min_ratings(
-                t, plex, min_track, min_album, min_artist, allow_unrated
-            ):
-                continue
-            if not passes_playcount(t, min_play_count, max_play_count):
-                continue
-            if not passes_year_filter(t, plex, min_year, max_year):
-                continue
-            if not passes_duration_filter(t, min_duration_sec, max_duration_sec):
-                continue
-            if not passes_collection_filters(t, plex, include_collections, exclude_collections):
-                continue
-            if track_has_excluded_genre(t, plex, exclude_genres):
-                continue
+            _try_add_candidate(t)
 
-            cand_seen.add(rk)
-            extra.append(t)
-            if len(filtered) + len(extra) >= max_tracks * 2:
-                break
-
-        filtered.extend(extra)
         log_detail(f"After fallback, candidates count: {len(filtered)}")
 
     if not filtered:
@@ -1568,89 +1721,133 @@ def main() -> int:
         return 4
 
     # ------------------------------------------------------------------
-    # Step 4b: Genre strictness (album-level)
+    # Step 5: Recency bias + artist/album caps + genre strict
     # ------------------------------------------------------------------
-    if genre_strict and genre_seeds:
-        in_genre: List[Track] = []
-        off_genre: List[Track] = []
-        for t in filtered:
-            if track_is_in_seed_genres(t, plex, genre_seeds):
-                in_genre.append(t)
-            else:
-                off_genre.append(t)
+    now = datetime.now()
+    recent_cutoff = now - timedelta(days=recently_added_days) if recently_added_days > 0 else None
 
-        random.shuffle(in_genre)
-        random.shuffle(off_genre)
+    def _is_recent(tr: Track) -> bool:
+        if recent_cutoff is None:
+            return False
+        added = getattr(tr, "addedAt", None)
+        if not added:
+            return False
+        return added >= recent_cutoff
 
-        max_off = int(len(filtered) * allow_off_genre_fraction)
-        filtered = in_genre + off_genre[:max_off]
-        log_detail(
-            f"After genre strictness: in_genre={len(in_genre)}, "
-            f"off_genre_used={min(len(off_genre), max_off)}, "
-            f"total={len(filtered)}"
-        )
+    recent_pool: List[Track] = [t for t in filtered if _is_recent(t)]
+    older_pool: List[Track] = [t for t in filtered if not _is_recent(t)]
 
-        if not filtered:
-            log("ERROR: No tracks remain after genre strict filtering.")
-            return 4
+    # Genre strictness uses album-level genres vs genre_seeds
+    seed_genre_set = {g.lower() for g in genre_seeds}
+    off_limit: Optional[int] = None
+    if genre_strict and seed_genre_set and allow_off_genre_fraction >= 0.0:
+        off_limit = int(max_tracks * allow_off_genre_fraction)
 
-    # ------------------------------------------------------------------
-    # Step 4c: Recency bias ordering
-    # ------------------------------------------------------------------
-    if recently_added_days > 0 and recently_added_weight > 0.0:
-        def _score(t: Track) -> float:
-            return popularity_score(t) + recently_added_weight * recency_score(t, recently_added_days)
-
-        filtered.sort(key=_score, reverse=True)
-    else:
-        random.shuffle(filtered)
-
-    # ------------------------------------------------------------------
-    # Step 4d: Artist / album caps and final truncation
-    # ------------------------------------------------------------------
-    final_tracks: List[Track] = []
     artist_counts: Dict[str, int] = defaultdict(int)
     album_counts: Dict[str, int] = defaultdict(int)
+    off_genre_count = 0
 
-    for t in filtered:
-        if len(final_tracks) >= max_tracks:
+    def _artist_name(tr: Track) -> str:
+        name = getattr(tr, "grandparentTitle", "") or ""
+        if name:
+            return name
+        try:
+            a = tr.artist()
+            if a is not None and getattr(a, "title", None):
+                return str(a.title)
+        except Exception:
+            pass
+        return "Unknown Artist"
+
+    def _album_key_and_genres(tr: Track) -> Tuple[Optional[str], Set[str]]:
+        album = resolve_album(tr, plex)
+        if album is None:
+            return None, set()
+        ak = getattr(album, "ratingKey", None)
+        gnames: Set[str] = set()
+        try:
+            gnames = {
+                str(g).strip().lower()
+                for g in (getattr(album, "genres", None) or [])
+                if str(g).strip()
+            }
+        except Exception:
+            pass
+        return ak, gnames
+
+    final_tracks: List[Track] = []
+    attempts = 0
+    max_attempts = len(filtered) * 5
+
+    while len(final_tracks) < max_tracks and (recent_pool or older_pool) and attempts < max_attempts:
+        attempts += 1
+
+        # Choose which pool to sample from, using recently_added_weight as probability
+        pool: Optional[List[Track]] = None
+        if recent_pool and older_pool and recently_added_weight > 0.0:
+            if random.random() < recently_added_weight:
+                pool = recent_pool
+            else:
+                pool = older_pool
+        elif recent_pool:
+            pool = recent_pool
+        elif older_pool:
+            pool = older_pool
+
+        if not pool:
             break
 
-        artist_key = (
-            getattr(t, "grandparentRatingKey", None)
-            or getattr(t, "grandparentTitle", None)
-            or ""
-        )
-        album_key = (
-            getattr(t, "parentRatingKey", None)
-            or getattr(t, "parentTitle", None)
-            or ""
-        )
+        idx = random.randrange(len(pool))
+        t = pool.pop(idx)
 
-        if max_tracks_per_artist is not None and artist_key:
-            if artist_counts[artist_key] >= max_tracks_per_artist:
+        # Artist / album caps and genre strictness
+        artist_name = _artist_name(t)
+        album_key, album_genres = _album_key_and_genres(t)
+
+        # On/off-genre w.r.t. seeds
+        on_genre = True
+        if seed_genre_set:
+            if not album_genres.intersection(seed_genre_set):
+                on_genre = False
+
+        if genre_strict and not on_genre:
+            if off_limit is None:
+                # If no off_limit, just skip off-genre when strict
                 continue
-        if max_tracks_per_album is not None and album_key:
-            if album_counts[album_key] >= max_tracks_per_album:
+            if off_genre_count >= off_limit:
+                reject_reasons["genre_off_limit"] += 1
                 continue
 
+        if max_tracks_per_artist is not None and artist_counts[artist_name] >= max_tracks_per_artist:
+            reject_reasons["artist_cap"] += 1
+            continue
+
+        if max_tracks_per_album is not None and album_key is not None and album_counts[album_key] >= max_tracks_per_album:
+            reject_reasons["album_cap"] += 1
+            continue
+
+        # Accept this track
         final_tracks.append(t)
-        if artist_key:
-            artist_counts[artist_key] += 1
-        if album_key:
+        artist_counts[artist_name] += 1
+        if album_key is not None:
             album_counts[album_key] += 1
+        if genre_strict and not on_genre:
+            off_genre_count += 1
 
-    log_status(60, f"Final track count before playlist creation: {len(final_tracks)}")
+    log_status(60, f"Final track count before truncate: {len(final_tracks)}")
 
     if not final_tracks:
-        log("ERROR: No tracks selected after applying artist/album caps.")
+        log("ERROR: No tracks available after diversity / recency shaping.")
         return 4
 
+    if len(final_tracks) > max_tracks:
+        final_tracks = final_tracks[:max_tracks]
+
     # ------------------------------------------------------------------
-    # Step 5: Create playlist
+    # Step 6: Create playlist
     # ------------------------------------------------------------------
     log_status(80, "Generating title and description...")
-    title = build_playlist_title(seed_mode, period)
+    title = build_playlist_title(seed_mode, period, custom_title=custom_title)
     description = build_playlist_description(seed_mode, period, final_tracks)
 
     log_status(90, "Creating playlist in Plex...")

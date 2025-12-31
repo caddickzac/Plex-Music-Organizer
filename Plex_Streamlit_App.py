@@ -794,42 +794,52 @@ def apply_preset_to_session(preset: dict) -> None:
     """
     keys = [
         "pc_lib",
+        "pc_custom_title",
+
         "pc_exclude_days",
         "pc_lookback_days",
         "pc_max_tracks",
         "pc_sonic_limit",
         "pc_hist_ratio",
         "pc_explore_exploit",
-        "pc_diversity",
         "pc_use_periods",
+
         "pc_min_track",
         "pc_min_album",
         "pc_min_artist",
         "pc_allow_unrated",
+
         "pc_min_play_count",
         "pc_max_play_count",
-        "pc_hist_min_rating",
-        "pc_hist_max_play_count",
+
         "pc_min_year",
         "pc_max_year",
         "pc_min_duration",
         "pc_max_duration",
+
         "pc_recent_days",
         "pc_recent_weight",
+
         "pc_max_artist",
         "pc_max_album",
+
+        "pc_hist_min_rating",
+        "pc_hist_max_play_count",
+
         "pc_seed_mode_label",
+        "pc_seed_fallback_mode",
+
         "pc_seed_tracks",
         "pc_seed_artists",
         "pc_seed_playlists",
         "pc_seed_collections",
         "pc_seed_genres",
+
         "pc_genre_strict",
         "pc_allow_off_genre",
-        "pc_include_cols",
-        "pc_exclude_cols",
         "pc_exclude_genres",
-        "pc_seed_fallback_mode",
+        "pc_include_collections",
+        "pc_exclude_collections",
     ]
     for k in keys:
         if k in preset:
@@ -847,127 +857,129 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "in the Scripts/ folder."
     )
 
-    st.markdown("**Playlist Creator script location**")
-    st.code(PLAYLIST_CREATOR_SCRIPT, language="text")
-
-    if not os.path.isfile(PLAYLIST_CREATOR_SCRIPT):
-        st.error("`playlist_creator.py` not found in Scripts/. Put it there or adjust PLAYLIST_CREATOR_SCRIPT.")
-        return
-
-    if not (cfg.plex_baseurl and cfg.plex_token):
-        st.warning("Enter Plex URL and Plex Token in the left panel first.")
-        return
-
-    # --- Preset management ---------------------------------------------------
+    # ---------------------------
+    # Presets UI (TOP)
+    # ---------------------------
     ensure_presets_dir()
     st.markdown("### Presets")
 
-    presets = list_presets()
-    col_p1, col_p2 = st.columns([2, 2])
+    existing_presets = list_presets()
+    preset_options = ["<none>"] + existing_presets
 
+    col_p1, col_p2 = st.columns([2, 2])
     with col_p1:
         selected_preset = st.selectbox(
-            "Load preset",
-            options=["(none)"] + presets,
+            "Load existing preset",
+            options=preset_options,
             index=0,
             key="pc_preset_select",
         )
-        load_btn = st.button("Load preset", key="pc_preset_load")
-
     with col_p2:
         preset_name = st.text_input(
-            "Save current settings as…",
+            "Preset name (for saving)",
             value=st.session_state.get("pc_preset_name", ""),
             key="pc_preset_name",
-            placeholder="e.g., Psychedelic Evening",
+            placeholder="e.g., Classic Rock 1960–79",
         )
-        save_btn = st.button("Save current as preset", key="pc_preset_save")
 
-    # Handle preset load
-    if load_btn and selected_preset and selected_preset != "(none)":
-        preset = load_preset_dict(selected_preset)
-        if not preset:
-            st.error(f"Could not load preset '{selected_preset}'.")
-        else:
-            apply_preset_to_session(preset)
-            # Rerun so that widgets pick up new state
-            try:
-                st.rerun()
-            except Exception:
-                st.experimental_rerun()  # type: ignore[attr-defined]
+    col_pb1, col_pb2 = st.columns(2)
+    with col_pb1:
+        if st.button("Load preset", key="pc_btn_load") and selected_preset != "<none>":
+            preset = load_preset_dict(selected_preset)
+            if preset:
+                apply_preset_to_session(preset)
+                st.success(f"Loaded preset: {selected_preset}")
+                st.experimental_rerun()
+            else:
+                st.warning(f"Preset '{selected_preset}' could not be loaded.")
 
-    # We'll gather all relevant UI values into this dict on save
-    def _collect_preset_from_state() -> dict:
-        keys = [
-            "pc_lib",
-            "pc_exclude_days",
-            "pc_lookback_days",
-            "pc_max_tracks",
-            "pc_sonic_limit",
-            "pc_hist_ratio",
-            "pc_explore_exploit",
-            "pc_diversity",
-            "pc_use_periods",
-            "pc_min_track",
-            "pc_min_album",
-            "pc_min_artist",
-            "pc_allow_unrated",
-            "pc_min_play_count",
-            "pc_max_play_count",
-            "pc_hist_min_rating",
-            "pc_hist_max_play_count",
-            "pc_min_year",
-            "pc_max_year",
-            "pc_min_duration",
-            "pc_max_duration",
-            "pc_recent_days",
-            "pc_recent_weight",
-            "pc_max_artist",
-            "pc_max_album",
-            "pc_seed_mode_label",
-            "pc_seed_tracks",
-            "pc_seed_artists",
-            "pc_seed_playlists",
-            "pc_seed_collections",
-            "pc_seed_genres",
-            "pc_genre_strict",
-            "pc_allow_off_genre",
-            "pc_include_cols",
-            "pc_exclude_cols",
-            "pc_exclude_genres",
-            "pc_seed_fallback_mode",
-        ]
-        out = {}
-        for k in keys:
-            if k in st.session_state:
-                out[k] = st.session_state[k]
-        return out
+    with col_pb2:
+        if st.button("Save current settings as preset", key="pc_btn_save"):
+            name = (preset_name or "").strip()
+            if not name:
+                st.error("Please enter a preset name before saving.")
+            else:
+                # What we store as a preset: all relevant pc_* keys
+                preset_keys = [
+                    "pc_lib",
+                    "pc_custom_title",
 
-    if save_btn:
-        name = (preset_name or "").strip()
-        if not name:
-            st.error("Enter a preset name before saving.")
-        else:
-            data = _collect_preset_from_state()
-            try:
+                    "pc_exclude_days",
+                    "pc_lookback_days",
+                    "pc_max_tracks",
+                    "pc_sonic_limit",
+                    "pc_hist_ratio",
+                    "pc_explore_exploit",
+                    "pc_use_periods",
+
+                    "pc_min_track",
+                    "pc_min_album",
+                    "pc_min_artist",
+                    "pc_allow_unrated",
+
+                    "pc_min_play_count",
+                    "pc_max_play_count",
+
+                    "pc_min_year",
+                    "pc_max_year",
+                    "pc_min_duration",
+                    "pc_max_duration",
+
+                    "pc_recent_days",
+                    "pc_recent_weight",
+
+                    "pc_max_artist",
+                    "pc_max_album",
+
+                    "pc_hist_min_rating",
+                    "pc_hist_max_play_count",
+
+                    # 👇 make sure this is here
+                    "pc_seed_mode_label",
+                    "pc_seed_fallback_mode",
+
+                    "pc_seed_tracks",
+                    "pc_seed_artists",
+                    "pc_seed_playlists",
+                    "pc_seed_collections",
+                    "pc_seed_genres",
+
+                    "pc_genre_strict",
+                    "pc_allow_off_genre",
+                    "pc_exclude_genres",
+                    "pc_include_collections",
+                    "pc_exclude_collections",
+                ]
+                data = {k: st.session_state.get(k) for k in preset_keys}
                 save_preset_dict(name, data)
-                st.success(f"Saved preset '{name}'.")
-            except Exception as e:
-                st.error(f"Failed to save preset: {e}")
+
+                st.success(f"Saved preset: {name}")
 
     st.divider()
 
-    # --- Main controls --------------------------------------------------------
-    st.markdown("### Basic settings")
+    # ---------------------------
+    # Core playlist UI
+    # ---------------------------
 
     # Music library name
-    music_lib = st.text_input(
-        "Music library name",
-        value=st.session_state.get("pc_lib", "Music"),
-        key="pc_lib",
+    music_lib = st.text_input("Music library name", value="Music", key="pc_lib")
+
+    # Playlist naming (custom title)
+    st.markdown("### Playlist naming")
+    custom_title = st.text_input(
+        "Custom playlist title (optional)",
+        value=st.session_state.get("pc_custom_title", ""),
+        key="pc_custom_title",
+        placeholder="e.g., Sunday Psych, Classic Rock 1960–79, Morning Ambient",
+        help=(
+            "If set, this will be used as the playlist title and printed onto the "
+            "generated black cover art image."
+        ),
     )
 
+    st.divider()
     st.markdown("### Playlist parameters")
+
     col_a, col_b, col_c = st.columns(3)
 
     with col_a:
@@ -975,7 +987,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Exclude played (days)",
             min_value=0,
             max_value=365,
-            value=int(st.session_state.get("pc_exclude_days", 3)),
+            value=st.session_state.get("pc_exclude_days", 3),
             step=1,
             key="pc_exclude_days",
         )
@@ -983,7 +995,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "History lookback (days)",
             min_value=1,
             max_value=365,
-            value=int(st.session_state.get("pc_lookback_days", 30)),
+            value=st.session_state.get("pc_lookback_days", 30),
             step=1,
             key="pc_lookback_days",
         )
@@ -991,7 +1003,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Max tracks",
             min_value=5,
             max_value=300,
-            value=int(st.session_state.get("pc_max_tracks", 50)),
+            value=st.session_state.get("pc_max_tracks", 50),
             step=1,
             key="pc_max_tracks",
         )
@@ -1001,7 +1013,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Sonically similar per seed",
             min_value=5,
             max_value=100,
-            value=int(st.session_state.get("pc_sonic_limit", 20)),
+            value=st.session_state.get("pc_sonic_limit", 20),
             step=1,
             key="pc_sonic_limit",
         )
@@ -1009,37 +1021,28 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Historical ratio (fraction of tracks from history)",
             0.0,
             1.0,
-            float(st.session_state.get("pc_hist_ratio", 0.3)),
+            st.session_state.get("pc_hist_ratio", 0.3),
             0.05,
             key="pc_hist_ratio",
         )
         use_time_periods = st.checkbox(
             "Use time-of-day periods",
-            value=bool(st.session_state.get("pc_use_periods", False)),
+            value=st.session_state.get("pc_use_periods", False),
             key="pc_use_periods",
         )
 
     with col_c:
         explore_exploit = st.slider(
-            "Explore vs exploit (popularity / play history)",
+            "Explore vs. exploit (popularity)",
             min_value=0.0,
             max_value=1.0,
-            value=float(st.session_state.get("pc_explore_exploit", 0.7)),
+            value=st.session_state.get("pc_explore_exploit", 0.7),
             step=0.05,
-            help="0 = pure exploration, 1 = pure exploitation of popularity.",
             key="pc_explore_exploit",
-        )
-        diversity = st.slider(
-            "Diversity (artist spread)",
-            min_value=0.0,
-            max_value=1.0,
-            value=float(st.session_state.get("pc_diversity", 0.3)),
-            step=0.05,
             help=(
-                "0 = very consistent / on-theme (strongly favor similar & popular tracks). "
-                "1 = highly varied / exploratory (roam more widely in sonic space)."
+                "0 = pure exploration (low popularity bias), "
+                "1 = pure exploitation (strong bias toward most popular tracks)."
             ),
-            key="pc_diversity",
         )
         seed_fallback_mode = st.radio(
             "When explicit seeds are too few, fill from:",
@@ -1060,7 +1063,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Min track rating",
             min_value=0,
             max_value=10,
-            value=int(st.session_state.get("pc_min_track", 7)),
+            value=st.session_state.get("pc_min_track", 7),
             step=1,
             key="pc_min_track",
         )
@@ -1069,7 +1072,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Min album rating",
             min_value=0,
             max_value=10,
-            value=int(st.session_state.get("pc_min_album", 0)),
+            value=st.session_state.get("pc_min_album", 0),
             step=1,
             key="pc_min_album",
         )
@@ -1078,16 +1081,16 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Min artist rating",
             min_value=0,
             max_value=10,
-            value=int(st.session_state.get("pc_min_artist", 0)),
+            value=st.session_state.get("pc_min_artist", 0),
             step=1,
             key="pc_min_artist",
         )
     with r4:
         allow_unrated = st.checkbox(
             "Allow tracks with no rating",
-            value=bool(st.session_state.get("pc_allow_unrated", True)),
-            help="If checked, tracks/albums/artists with userRating = None are allowed even when minimums are set.",
+            value=st.session_state.get("pc_allow_unrated", True),
             key="pc_allow_unrated",
+            help="If checked, tracks/albums/artists with userRating = None are allowed even when minimums are set.",
         )
 
     st.markdown("### Play count filters")
@@ -1102,7 +1105,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Min play count (–1 = no minimum)",
             min_value=-1,
             max_value=10000,
-            value=int(st.session_state.get("pc_min_play_count", -1)),
+            value=st.session_state.get("pc_min_play_count", -1),
             step=1,
             key="pc_min_play_count",
         )
@@ -1111,128 +1114,186 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "Max play count (–1 = no maximum)",
             min_value=-1,
             max_value=10000,
-            value=int(st.session_state.get("pc_max_play_count", -1)),
+            value=st.session_state.get("pc_max_play_count", -1),
             step=1,
             key="pc_max_play_count",
         )
 
-    st.markdown("### History filters")
-    hf1, hf2 = st.columns(2)
-    with hf1:
-        history_min_rating = st.number_input(
-            "Min rating for history tracks (0–10)",
-            min_value=0,
-            max_value=10,
-            value=int(st.session_state.get("pc_hist_min_rating", 0)),
-            step=1,
-            key="pc_hist_min_rating",
-        )
-    with hf2:
-        history_max_play_count = st.number_input(
-            "Max play count for history tracks (–1 = no max)",
-            min_value=-1,
-            max_value=10000,
-            value=int(st.session_state.get("pc_hist_max_play_count", -1)),
-            step=1,
-            key="pc_hist_max_play_count",
-        )
+    st.markdown("### Year & duration filters (album-based year)")
 
-    st.markdown("### Era & duration filters")
-    ed1, ed2 = st.columns(2)
-    with ed1:
+    y1, y2, d1, d2 = st.columns(4)
+    with y1:
         min_year = st.number_input(
-            "Min year (0 = no minimum)",
+            "Min album year (0 = none)",
             min_value=0,
             max_value=3000,
-            value=int(st.session_state.get("pc_min_year", 0)),
+            value=st.session_state.get("pc_min_year", 0),
             step=1,
             key="pc_min_year",
         )
-        min_duration_sec = st.number_input(
-            "Min duration (sec, 0 = no minimum)",
-            min_value=0,
-            max_value=3600,
-            value=int(st.session_state.get("pc_min_duration", 0)),
-            step=5,
-            key="pc_min_duration",
-        )
-    with ed2:
+    with y2:
         max_year = st.number_input(
-            "Max year (0 = no maximum)",
+            "Max album year (0 = none)",
             min_value=0,
             max_value=3000,
-            value=int(st.session_state.get("pc_max_year", 0)),
+            value=st.session_state.get("pc_max_year", 0),
             step=1,
             key="pc_max_year",
         )
-        max_duration_sec = st.number_input(
-            "Max duration (sec, 0 = no maximum)",
+    with d1:
+        min_duration_sec = st.number_input(
+            "Min track duration (sec, 0 = none)",
             min_value=0,
-            max_value=3600,
-            value=int(st.session_state.get("pc_max_duration", 0)),
+            max_value=60 * 60 * 4,
+            value=st.session_state.get("pc_min_duration", 0),
+            step=5,
+            key="pc_min_duration",
+        )
+    with d2:
+        max_duration_sec = st.number_input(
+            "Max track duration (sec, 0 = none)",
+            min_value=0,
+            max_value=60 * 60 * 4,
+            value=st.session_state.get("pc_max_duration", 0),
             step=5,
             key="pc_max_duration",
         )
 
-    st.markdown("### Recency bias")
-    rb1, rb2 = st.columns(2)
-    with rb1:
-        recent_days = st.number_input(
-            "Recently added window (days, 0 = off)",
+    st.markdown("### Recency bias (Recently added)")
+
+    rba, rbb = st.columns(2)
+    with rba:
+        recently_added_days = st.number_input(
+            "Recently added window (days, 0 = ignore)",
             min_value=0,
             max_value=365,
-            value=int(st.session_state.get("pc_recent_days", 0)),
+            value=st.session_state.get("pc_recent_days", 0),
             step=1,
             key="pc_recent_days",
         )
-    with rb2:
-        recent_weight = st.slider(
-            "Recency added weight (0–1)",
-            0.0,
-            1.0,
-            float(st.session_state.get("pc_recent_weight", 0.0)),
-            0.05,
+    with rbb:
+        recently_added_weight = st.slider(
+            "Recently added weight",
+            min_value=0.0,
+            max_value=2.0,
+            value=st.session_state.get("pc_recent_weight", 1.0),
+            step=0.05,
             key="pc_recent_weight",
+            help=">1 favors newly added tracks more strongly; <1 downweights them.",
         )
 
-    st.markdown("### Artist & album diversity")
-    da1, da2 = st.columns(2)
-    with da1:
+    st.markdown("### Artist / album caps")
+    aa1, aa2 = st.columns(2)
+    with aa1:
         max_tracks_per_artist = st.number_input(
             "Max tracks per artist (0 = no cap)",
             min_value=0,
-            max_value=50,
-            value=int(st.session_state.get("pc_max_artist", 0)),
+            max_value=1000,
+            value=st.session_state.get("pc_max_artist", 6),
             step=1,
             key="pc_max_artist",
         )
-    with da2:
+    with aa2:
         max_tracks_per_album = st.number_input(
             "Max tracks per album (0 = no cap)",
             min_value=0,
-            max_value=50,
-            value=int(st.session_state.get("pc_max_album", 0)),
+            max_value=1000,
+            value=st.session_state.get("pc_max_album", 0),
             step=1,
             key="pc_max_album",
         )
 
-    st.divider()
+    st.markdown("### History filters (for history-based seeds & fallbacks)")
+
+    h1, h2 = st.columns(2)
+    with h1:
+        history_min_rating = st.number_input(
+            "History: min track rating (0–10)",
+            min_value=0,
+            max_value=10,
+            value=st.session_state.get("pc_hist_min_rating", 0),
+            step=1,
+            key="pc_hist_min_rating",
+        )
+    with h2:
+        history_max_play_count = st.number_input(
+            "History: max play count (–1 = no max)",
+            min_value=-1,
+            max_value=10000,
+            value=st.session_state.get("pc_hist_max_play_count", -1),
+            step=1,
+            key="pc_hist_max_play_count",
+        )
+
+    st.markdown("### Genre & collections filters (album-level)")
+
+    gcol1, gcol2 = st.columns(2)
+    with gcol1:
+        genre_seeds_raw = st.text_input(
+            "Genre seeds (comma-separated, album-level)",
+            value=st.session_state.get("pc_seed_genres", ""),
+            placeholder="e.g., Rock, Psychedelic Rock, Jazz",
+            key="pc_seed_genres",
+        )
+        include_collections_raw = st.text_input(
+            "Include only collections (comma-separated, album-level)",
+            value=st.session_state.get("pc_include_collections", ""),
+            placeholder="e.g., Classic Rock, Sunday Psych",
+            key="pc_include_collections",
+        )
+    with gcol2:
+        exclude_collections_raw = st.text_input(
+            "Exclude collections (comma-separated, album-level)",
+            value=st.session_state.get("pc_exclude_collections", ""),
+            placeholder="e.g., Christmas, Kids Music",
+            key="pc_exclude_collections",
+        )
+        exclude_genres_raw = st.text_input(
+            "Exclude genres (comma-separated, album-level)",
+            value=st.session_state.get("pc_exclude_genres", ""),
+            placeholder="e.g., Holiday, Comedy",
+            key="pc_exclude_genres",
+        )
+
+    genre_strict = st.checkbox(
+        "Genre strict (enforce album genres against genre_seeds)",
+        value=st.session_state.get("pc_genre_strict", False),
+        key="pc_genre_strict",
+        help=(
+            "If checked, album genres must intersect with genre_seeds. "
+            "Off-genre tracks can still appear up to the allowed fraction."
+        ),
+    )
+
+    off_genre_fraction = st.slider(
+        "Allow off-genre fraction",
+        min_value=0.0,
+        max_value=1.0,
+        value=st.session_state.get("pc_allow_off_genre", 0.2),
+        step=0.05,
+        key="pc_allow_off_genre",
+        help="Maximum fraction of tracks allowed that don't match the album-level genre seeds.",
+    )
+
     st.markdown("### Seed strategy")
+
+
+    seed_options = [
+        "Auto (infer from seeds/history)",
+        "History only",
+        "Genre seeds",
+        "Sonic Album Mix",
+        "Sonic Artist Mix",
+        "Sonic Combo (Albums + Artists)",
+        "Album Echoes (seed albums only)",
+        "Sonic Tracks (track-level similarity)",
+    ]
 
     seed_mode_label = st.selectbox(
         "Seed mode",
-        [
-            "Auto (infer from seeds/history)",
-            "History only",
-            "Genre seeds",
-            "Sonic Album Mix",
-            "Sonic Artist Mix",
-            "Sonic Combo (Albums + Artists)",
-            "Album Echoes (seed albums only)",
-            "Sonic Tracks (track-level similarity)",
-        ],
+        seed_options,
         index=0,
-        key="pc_seed_mode_label",
+        key="pc_seed_mode_label",   # 👈 critical
         help=(
             "How to build the core candidate set:\n"
             "- Auto: let the script infer based on provided seeds and history\n"
@@ -1242,8 +1303,9 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "- Sonic Combo: both sonic albums and sonic artists\n"
             "- Album Echoes: one track per seed album, no extra sonic expansion\n"
             "- Sonic Tracks: expand directly from seed tracks via sonicallySimilar()"
-        )
+        ),
     )
+
 
     seed_mode_map = {
         "Auto (infer from seeds/history)": "",
@@ -1255,12 +1317,13 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "Album Echoes (seed albums only)": "album_echoes",
         "Sonic Tracks (track-level similarity)": "track_sonic",
     }
-    seed_mode = seed_mode_map[seed_mode_label]
+    seed_mode = seed_mode_map[st.session_state["pc_seed_mode_label"]]
 
     st.markdown("### Seed sources")
 
     st.caption(
-        "Any combination of seeds can be used. Playlist Creator will deduplicate and then expand via sonic similarity and/or history."
+        "Any combination of seeds can be used. Playlist Creator will deduplicate "
+        "and then expand via sonic similarity and/or history."
     )
 
     def _parse_list(text: str) -> List[str]:
@@ -1295,58 +1358,14 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             placeholder="e.g., All That Jazz",
             key="pc_seed_collections",
         )
-        genre_seeds_raw = st.text_input(
-            "Genre seeds (comma-separated)",
-            value=st.session_state.get("pc_seed_genres", ""),
-            placeholder="e.g., Jazz, Soul, Ambient",
-            key="pc_seed_genres",
-        )
 
     seed_track_keys = _parse_list(seed_track_keys_raw)
     seed_artist_names = _parse_list(seed_artist_names_raw)
     seed_playlist_names = _parse_list(seed_playlist_names_raw)
     seed_collection_names = _parse_list(seed_collection_names_raw)
     genre_seeds = _parse_list(genre_seeds_raw)
-
-    st.markdown("### Genre & collection constraints")
-
-    colg1, colg2 = st.columns(2)
-    with colg1:
-        genre_strict = st.checkbox(
-            "Strict genre: only tracks that match seed genres",
-            value=bool(st.session_state.get("pc_genre_strict", False)),
-            key="pc_genre_strict",
-        )
-        allow_off_genre_fraction = st.slider(
-            "Max off-genre fraction (when strict)",
-            0.0,
-            1.0,
-            float(st.session_state.get("pc_allow_off_genre", 0.2)),
-            0.05,
-            key="pc_allow_off_genre",
-        )
-        include_cols_raw = st.text_input(
-            "Include collections (comma-separated, blank = no restriction)",
-            value=st.session_state.get("pc_include_cols", ""),
-            placeholder="e.g., All That Jazz, Audiophile",
-            key="pc_include_cols",
-        )
-    with colg2:
-        exclude_cols_raw = st.text_input(
-            "Exclude collections (comma-separated)",
-            value=st.session_state.get("pc_exclude_cols", ""),
-            placeholder="e.g., Holiday Music",
-            key="pc_exclude_cols",
-        )
-        exclude_genres_raw = st.text_input(
-            "Exclude genres (comma-separated, album-level)",
-            value=st.session_state.get("pc_exclude_genres", ""),
-            placeholder="e.g., Comedy, Kids",
-            key="pc_exclude_genres",
-        )
-
-    include_collections = _parse_list(include_cols_raw)
-    exclude_collections = _parse_list(exclude_cols_raw)
+    include_collections = _parse_list(include_collections_raw)
+    exclude_collections = _parse_list(exclude_collections_raw)
     exclude_genres = _parse_list(exclude_genres_raw)
 
     st.divider()
@@ -1379,44 +1398,65 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "token": cfg.plex_token,
             "music_library": music_lib,
         },
-        "playlist": {
+                "playlist": {
             "exclude_played_days": int(exclude_days),
             "history_lookback_days": int(lookback_days),
             "max_tracks": int(max_tracks),
             "sonic_similar_limit": int(sonic_similar_limit),
             "historical_ratio": float(historical_ratio),
             "exploit_weight": float(exploit_weight),
+
+            # rating filters
             "min_rating": {
                 "track": int(min_track),
                 "album": int(min_album),
                 "artist": int(min_artist),
             },
             "allow_unrated": 1 if allow_unrated else 0,
+
+            # time periods / fallback
+            "use_time_periods": 1 if use_time_periods else 0,
+            "seed_fallback_mode": seed_fallback_mode.lower(),
+            "seed_mode": seed_mode,
+
+            # play count filters
             "min_play_count": int(min_play_count),
             "max_play_count": int(max_play_count),
-            "history_min_rating": int(history_min_rating),
-            "history_max_play_count": int(history_max_play_count),
+
+            # 💿 Year & duration filters (album-level year, track-level duration)
             "min_year": int(min_year),
             "max_year": int(max_year),
             "min_duration_sec": int(min_duration_sec),
             "max_duration_sec": int(max_duration_sec),
-            "recently_added_days": int(recent_days),
-            "recently_added_weight": float(recent_weight),
+
+            # 🕒 Recency bias (recently added)
+            "recently_added_days": int(recently_added_days),
+            "recently_added_weight": float(recently_added_weight),
+
+            # 👥 Artist / album caps
             "max_tracks_per_artist": int(max_tracks_per_artist),
             "max_tracks_per_album": int(max_tracks_per_album),
-            "use_time_periods": 1 if use_time_periods else 0,
-            "seed_fallback_mode": seed_fallback_mode.lower(),
-            "seed_mode": seed_mode,
+
+            # 📜 History filters
+            "history_min_rating": int(history_min_rating),
+            "history_max_play_count": int(history_max_play_count),
+
+            # 🎯 Genre strictness & collections
+            "genre_strict": 1 if genre_strict else 0,
+            "allow_off_genre_fraction": float(off_genre_fraction),
+            "include_collections": include_collections,
+            "exclude_collections": exclude_collections,
+            "exclude_genres": exclude_genres,
+
+            # 🔥 Custom playlist title → naming + cover art
+            "custom_title": custom_title.strip() or None,
+
+            # Seed lists
             "seed_track_keys": seed_track_keys,
             "seed_artist_names": seed_artist_names,
             "seed_playlist_names": seed_playlist_names,
             "seed_collection_names": seed_collection_names,
             "genre_seeds": genre_seeds,
-            "genre_strict": 1 if genre_strict else 0,
-            "allow_off_genre_fraction": float(allow_off_genre_fraction),
-            "include_collections": include_collections,
-            "exclude_collections": exclude_collections,
-            "exclude_genres": exclude_genres,
         },
     }
 
@@ -1454,6 +1494,8 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         st.success("Playlist Creator finished successfully. Check Plex for the new playlist.")
     else:
         st.error(f"Playlist Creator exited with code {ret}. Review the log above.")
+
+
 
 # ---------------------------
 # Compare tab
