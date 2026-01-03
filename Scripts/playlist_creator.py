@@ -66,14 +66,16 @@ Reads JSON config from stdin, e.g.:
 
 from __future__ import annotations
 
+import os 
 import sys
 import json
 import random
 import time
+import textwrap
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from typing import List, Dict, Optional, Set, Tuple
-
+from PIL import Image, ImageDraw, ImageFont
 from plexapi.server import PlexServer  # type: ignore
 from plexapi.audio import Track, Album, Artist  # type: ignore
 
@@ -257,6 +259,43 @@ def popularity_score(track: Track) -> float:
         return float(rc or 0.0)
     except Exception:
         return 0.0
+
+# ---------------------------------------------------------------------------
+# Thumbnail Helper
+# ---------------------------------------------------------------------------
+
+def create_playlist_thumbnail(title, output_path="thumb.png"):
+    # 1. Setup Image (Square, Black)
+    size = 1000
+    img = Image.new('RGB', (size, size), color='black')
+    draw = ImageDraw.Draw(img)
+    
+    # 2. Load Fonts (Adjust path if on Windows vs Linux)
+    try:
+        # Bold/Large for Title, Regular for Date
+        title_font = ImageFont.truetype("arial.ttf", 80)
+        date_font = ImageFont.truetype("arial.ttf", 50)
+    except:
+        title_font = ImageFont.load_default()
+        date_font = ImageFont.load_default()
+
+    # 3. Handle Title (Top Right with Textwrap)
+    margin = 40
+    # Wraps text to roughly 15 characters per line
+    wrapped_title = textwrap.fill(title, width=15) 
+    
+    # Draw title anchored to the right (ra = Right-Ascender)
+    draw.multiline_text((size - margin, margin), wrapped_title, 
+                        font=title_font, fill="white", 
+                        align="right", anchor="ra", spacing=10)
+
+    # 4. Handle Date (Bottom Left)
+    current_date = datetime.now().strftime("%m/%d/%Y")
+    draw.text((margin, size - margin), current_date, 
+              font=date_font, fill="white", anchor="ld") # ld = Left-Descender
+
+    img.save(output_path)
+    return output_path
 
 
 # ---------------------------------------------------------------------------
@@ -1186,42 +1225,29 @@ def build_playlist_description(
     plex: PlexServer,
 ) -> str:
     """
-    Build description using ALBUM-LEVEL genres only.
+    ULTRA-FAST: No network calls. 
+    Uses grandparentTitle (Artist) and parentTitle (Album) which are already in memory.
     """
     day_name = datetime.now().strftime("%A")
 
-    # Album-level genre list
-    genre_list: List[str] = []
-    for t in tracks:
-        album = resolve_album(t, plex)
-        if album is None:
-            continue
-        try:
-            for g in getattr(album, "genres", None) or []:
-                s = str(g).strip()
-                if s:
-                    genre_list.append(s)
-        except Exception:
-            pass
-
-    # Artist names (from grandparentTitle where possible)
-    artists = [getattr(t, "grandparentTitle", "") or "" for t in tracks]
-    genre_counts = Counter(genre_list)
+    # Use attributes already attached to the track objects
+    artists = [getattr(t, "grandparentTitle", "Various") for t in tracks]
+    albums = [getattr(t, "parentTitle", "Unknown Album") for t in tracks]
+    
     artist_counts = Counter(artists)
+    top_artists = [a for a, _ in artist_counts.most_common(5) if a]
 
-    top_genres = [g for g, _ in genre_counts.most_common(3)]
-    top_artists = [a for a, _ in artist_counts.most_common(5)]
-
-    parts = [f"Seed mode: {seed_mode_label(seed_mode)}."]
-    if top_genres:
-        parts.append("Top genres: " + ", ".join(top_genres) + ".")
+    parts = [f"Sonic Mix: {seed_mode_label(seed_mode)}."]
+    
+    # We skip the album-genre lookup because that was the 4-minute bottleneck!
+    # Instead, we mention the variety of artists found.
     if top_artists:
-        parts.append("Frequent artists: " + ", ".join(top_artists) + ".")
+        parts.append("Features: " + ", ".join(top_artists) + ".")
 
     if period and period != "Anytime":
-        parts.append(f"Built for a {period.lower()} session on {day_name}.")
+        parts.append(f"Generated for a {period.lower()} session on {day_name}.")
     else:
-        parts.append(f"Built for {day_name} listening.")
+        parts.append(f"Generated on {day_name}.")
 
     return " ".join(parts)
 
@@ -1278,8 +1304,11 @@ def main() -> int:
             return None
         return iv
 
-    min_play_count = _parse_optional_int(pl_cfg.get("min_play_count", -1), zero_means_none=False)
-    max_play_count = _parse_optional_int(pl_cfg.get("max_play_count", -1), zero_means_none=False)
+    min_play_count = pl_cfg.get("min_play_count")
+    if min_play_count is None or min_play_count == -1: min_play_count = None
+    
+    max_play_count = pl_cfg.get("max_play_count")
+    if max_play_count is None or max_play_count == -1: max_play_count = None
 
     use_time_periods = bool(pl_cfg.get("use_time_periods", 0))
     seed_fallback_mode = (pl_cfg.get("seed_fallback_mode") or "history").lower()
@@ -1293,10 +1322,10 @@ def main() -> int:
     seed_mode = (pl_cfg.get("seed_mode") or "").strip().lower()
     custom_title = (pl_cfg.get("custom_title") or "").strip()
 
-    min_year = _parse_optional_int(pl_cfg.get("min_year", 0), zero_means_none=True)
-    max_year = _parse_optional_int(pl_cfg.get("max_year", 0), zero_means_none=True)
-    min_duration_sec = _parse_optional_int(pl_cfg.get("min_duration_sec", 0), zero_means_none=True)
-    max_duration_sec = _parse_optional_int(pl_cfg.get("max_duration_sec", 0), zero_means_none=True)
+    min_year = int(pl_cfg.get("min_year") or 0)
+    max_year = int(pl_cfg.get("max_year") or 0)
+    min_duration_sec = int(pl_cfg.get("min_duration_sec") or 0)
+    max_duration_sec = int(pl_cfg.get("max_duration_sec") or 0)
 
     recently_added_days = int(pl_cfg.get("recently_added_days", 0))
     recently_added_weight = float(pl_cfg.get("recently_added_weight", 0.0))
@@ -1316,6 +1345,28 @@ def main() -> int:
     include_collections = {str(x).strip() for x in pl_cfg.get("include_collections", []) if str(x).strip()}
     exclude_collections = {str(x).strip() for x in (pl_cfg.get("exclude_collections", []) or []) if str(x).strip()}
     exclude_genres = {str(x).strip().lower() for x in (pl_cfg.get("exclude_genres", []) or []) if str(x).strip()}
+
+    def _artist_name(tr: Track) -> str:
+        # Use grandparentTitle (Plex's standard for Track Artist) to avoid network calls
+        return getattr(tr, 'grandparentTitle', 'Unknown Artist')
+
+    def _artist_key(tr: Track) -> str:
+        """Returns a unique key for the artist."""
+        return getattr(tr.artist, "ratingKey", _artist_name(tr))
+
+    def _album_key_and_genres(tr: Track) -> Tuple[Optional[str], Set[str]]:
+        """
+        High-speed version: Uses pre-fetched ID and 
+        assumes search-level genre filtering is sufficient.
+        """
+        # 1. Get Album ID (parentRatingKey is pre-fetched)
+        ak = getattr(tr, 'parentRatingKey', None)
+        
+        # 2. Return the seed genres so the shaping loop doesn't reject them.
+        # We lowercase them to match the script's internal comparison logic.
+        gnames = {g.lower() for g in seed_genre_set}
+        
+        return str(ak) if ak else None, gnames
 
     log_status(0, "Starting Playlist Creator...")
 
@@ -1622,73 +1673,38 @@ def main() -> int:
     candidates.extend(seed_tracks)
 
     # ------------------------------------------------------------------
-    # Step 4: Static filters + fallback if underfilled
+    # Step 4: High-Performance Album-Genre Search
     # ------------------------------------------------------------------
-    log_status(50, "Filtering and deduplicating candidates...")
+    log_status(50, f"Querying Plex for {min_year}-{max_year} {genre_seeds}...")
 
-    cand_seen: Set[str] = set()
-    filtered: List[Track] = []
-    reject_reasons: Counter = Counter()
+    filters = {}
+    if min_year > 0:
+        filters['year>>='] = min_year
+    if max_year > 0:
+        filters['year<<='] = max_year
+    
+    # CRITICAL CHANGE: Search for the genre on the ALBUM, not the track
+    if genre_seeds:
+        filters['album.genre'] = genre_seeds
 
-    def _try_add_candidate(t: Track) -> None:
-        # Recency check (exclude_played_days)
-        if is_recently_played(t, exclude_days, excluded_keys):
-            reject_reasons["recently_played"] += 1
-            return
-
-        if track_passes_static_filters(
-            t,
-            plex,
-            cand_seen,
-            excluded_keys,
-            min_track,
-            min_album,
-            min_artist,
-            allow_unrated,
-            min_play_count,
-            max_play_count,
-            min_year,
-            max_year,
-            min_duration_sec,
-            max_duration_sec,
-            include_collections,
-            exclude_collections,
-            exclude_genres,
-            reject_reasons,
-        ):
-            filtered.append(t)
-
+    # This will now find every track belonging to those 1,312 Rock albums
+    candidates = music_section.search(libtype='track', filters=filters)
+    
+    filtered = []
     for t in candidates:
-        _try_add_candidate(t)
+        if t.ratingKey in excluded_keys:
+            continue
+            
+        t_rating = getattr(t, 'userRating', 0) or 0
+        if not allow_unrated and t_rating < min_track:
+            continue
+            
+        filtered.append(t)
 
-    log_detail(f"Candidates after dedupe & filters: {len(filtered)}")
-    if reject_reasons:
-        log_detail(f"Rejected counts by reason: {dict(reject_reasons)}")
-
-    if filtered:
-        names = [t.title for t in filtered[:25]]
-        log_detail(
-            "Candidate tracks after static filters (showing up to 25): "
-            + ", ".join(names)
-        )
-
-    # If still underfilled, fall back again to history / genre
-    if len(filtered) < max_tracks:
-        log_detail(
-            f"Filtered candidates < max_tracks ({len(filtered)} < {max_tracks}); "
-            f"using fallback='{seed_fallback_mode}'."
-        )
-        if seed_fallback_mode == "history":
-            fb_tracks = history_seeds
-        elif seed_fallback_mode == "genre":
-            fb_tracks = genre_tracks
-        else:
-            fb_tracks = []
-
-        for t in fb_tracks:
-            _try_add_candidate(t)
-
-        log_detail(f"After fallback, candidates count: {len(filtered)}")
+    unique_map = {t.ratingKey: t for t in filtered}
+    filtered = list(unique_map.values())
+    
+    log_detail(f"Advanced Filter complete: {len(filtered)} tracks found from Rock albums.")
 
     if not filtered:
         log("ERROR: No tracks available after filtering.")
@@ -1698,6 +1714,10 @@ def main() -> int:
     # Step 5: Recency bias + artist/album caps + genre strict
     # ------------------------------------------------------------------
     now = datetime.now()
+
+    # Store rejections specifically for the shaping loop
+    shaping_rejections = defaultdict(int)
+
     recent_cutoff = now - timedelta(days=recently_added_days) if recently_added_days > 0 else None
 
     def _is_recent(tr: Track) -> bool:
@@ -1710,7 +1730,7 @@ def main() -> int:
     older_pool: List[Track] = [t for t in filtered if not _is_recent(t)]
 
     seed_genre_set = {g.lower() for g in genre_seeds}
-    # FIX (Step C): Ensure 0 tracks doesn't break logic
+    # FIX (Step C): Ensure 0 tracks doesn't break logic 
     off_limit = int(max_tracks * allow_off_genre_fraction) if genre_strict else None
 
     artist_counts: Dict[str, int] = defaultdict(int)
@@ -1735,22 +1755,23 @@ def main() -> int:
         artist_name = _artist_name(t)
         album_key, album_genres = _album_key_and_genres(t)
 
+        # Genre Check
         on_genre = True
-        if seed_genre_set and not album_genres.intersection(seed_genre_set):
-            on_genre = False
+        if seed_genre_set:
+            if not album_genres.intersection(seed_genre_set):
+                on_genre = False
 
-        # FIX (Step C): Improved Genre Strictness Check
         if genre_strict and seed_genre_set and not on_genre:
             if off_limit is not None and off_genre_count >= off_limit:
-                reject_reasons["genre_off_limit"] += 1
+                shaping_rejections["genre_mismatch_limit"] += 1
                 continue
 
-        # Diversity Checks (Now works correctly if caps are None)
+        # Diversity Checks
         if max_tracks_per_artist is not None and artist_counts[artist_name] >= max_tracks_per_artist:
-            reject_reasons["artist_cap"] += 1
+            shaping_rejections["artist_cap_reached"] += 1
             continue
         if max_tracks_per_album is not None and album_key and album_counts[album_key] >= max_tracks_per_album:
-            reject_reasons["album_cap"] += 1
+            shaping_rejections["album_cap_reached"] += 1
             continue
 
         final_tracks.append(t)
@@ -1758,31 +1779,60 @@ def main() -> int:
         if album_key: album_counts[album_key] += 1
         if not on_genre: off_genre_count += 1
 
+        if not final_tracks:
+            log("ERROR: Shaping loop resulted in 0 tracks. Check diversity/genre settings.")
+            return 5
+
     # ------------------------------------------------------------------
-    # Step 6: Create playlist and Summary
+    # Step 6: Update existing playlist OR Create new + Thumbnail
     # ------------------------------------------------------------------
     log_status(80, "Generating title and description...")
     title = build_playlist_title(seed_mode, period, custom_title=custom_title)
     description = build_playlist_description(seed_mode, period, final_tracks, plex)
 
-    log_status(90, "Creating playlist in Plex...")
+    log_status(90, "Syncing playlist content and thumbnail...")
     try:
-        playlist = plex.createPlaylist(title, items=final_tracks)
-        playlist.editSummary(description)
+        # 1. Search for existing playlist
+        all_playlists = plex.playlists()
+        playlist = next((pl for pl in all_playlists if pl.title == title), None)
+
+        if playlist:
+            log(f"🔄 Found existing playlist '{title}'. Updating tracks...")
+            current_items = playlist.items()
+            if current_items:
+                playlist.removeItems(current_items)
+            playlist.addItems(final_tracks)
+        else:
+            log(f"✨ Creating new playlist: '{title}'")
+            playlist = plex.createPlaylist(title, items=final_tracks)
+
+        # 2. Metadata & Thumbnail
+        playlist.edit(summary=description) 
+
+        thumb_filename = f"thumb_{playlist.ratingKey}.png"
+        create_playlist_thumbnail(title, thumb_filename) # Ensure this helper is at the top of your file
+        
+        playlist.uploadPoster(filepath=thumb_filename)
+        log(f"✅ Thumbnail uploaded for Playlist ID {playlist.ratingKey}")
+        
+        if os.path.exists(thumb_filename):
+            os.remove(thumb_filename)
+
     except Exception as e:
-        log(f"Error creating playlist: {e}")
+        log(f"Error during playlist sync: {e}")
         return 5
 
     log_status(100, "Playlist creation complete.")
 
-    # FIX (Step B): Moved summary ABOVE return statement
     end_time = time.time()
     print("\n" + "="*50)
     print(f"PLAYLIST GENERATION SUMMARY")
     print(f"Status: SUCCESS")
-    print(f"Total Candidates Processed: {len(candidates)}")
-    print(f"Final Tracks in Playlist: {len(final_tracks)}")
-    print(f"Total Execution Time: {end_time - start_time:.2f} seconds")
+    print(f"Execution Time: {end_time - start_time:.2f}s")
+    print(f"Final Playlist Size: {len(final_tracks)}")
+    print("-" * 20)
+    print(f"Candidates Considered in Loop: {attempts}")
+    print(f"Shaping Rejections: {dict(shaping_rejections)}")
     print("="*50)
 
     return 0
