@@ -59,3 +59,4 @@ config.txt
 config.txt
 *.csv
 config.txt
+*.json

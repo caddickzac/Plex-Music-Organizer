@@ -53,7 +53,9 @@ Reads JSON config from stdin, e.g.:
     "exclude_collections": [],
     "exclude_genres": [],
 
-    "custom_title": "",
+    "custom_title": "My Favorite Mix",
+    "preset_name": "Sonic_v1",
+    "seed_mode": "track_sonic",
 
     "seed_track_keys": [],
     "seed_artist_names": [],
@@ -67,6 +69,8 @@ Reads JSON config from stdin, e.g.:
 from __future__ import annotations
 
 import os 
+import io
+import csv
 import sys
 import json
 import random
@@ -344,20 +348,38 @@ def get_sonic_similar_tracks(track: Track, limit: int) -> List[Track]:
     return []
 
 
-def get_sonic_similar_albums(album: Album, limit: int) -> List[Album]:
+def get_sonic_similar_artists(artist: Artist, limit: int) -> List[Artist]:
+    """
+    Fetches sonically similar artists using the Plex 'nearest' API endpoint.
+    """
     try:
-        rk = getattr(album, "ratingKey", None)
+        rk = getattr(artist, "ratingKey", None)
         if rk:
+            # Using the 'nearest' endpoint with context 'sonicallySimilar'
             endpoint = f"/library/metadata/{rk}/nearest?context=sonicallySimilar&limit={limit}"
-            return list(album.fetchItems(endpoint))
+            return list(artist.fetchItems(endpoint))
     except Exception as e:
-        log_warning(f"Sonic similarity failed for album '{album.title}': {e}")
+        log_warning(f"Sonic similarity failed for artist '{artist.title}': {e}")
     return []
 
 
 # ---------------------------------------------------------------------------
 # Album / artist helpers
 # ---------------------------------------------------------------------------
+
+def parse_seeds(input_str):
+    # This treats the string like a single line of a CSV file
+    f = io.StringIO(input_str)
+    reader = csv.reader(f, quotechar='"', delimiter=',', quoting=csv.QUOTE_ALL, skipinitialspace=False)
+    
+    try:
+        raw_names = next(reader)
+        # Manually strip spaces from the OUTSIDE of the names only
+        parsed_names = [n.strip() for n in raw_names if n.strip()]
+    except StopIteration:
+        parsed_names = []
+
+    log_detail(f"Parsed artist names: {parsed_names}")
 
 def resolve_album(track: Track, plex: PlexServer) -> Optional[Album]:
     ak = getattr(track, "parentRatingKey", None)
@@ -794,20 +816,25 @@ def collect_seed_tracks_from_collections(
     return seeds
 
 
-def collect_seed_artists(music_section, artist_names: List[str]) -> List[Artist]:
-    artists: List[Artist] = []
-    if not artist_names:
-        return artists
-    for name in artist_names:
-        try:
-            res = music_section.search(title=name, libtype="artist")
-            if res:
-                artists.append(res[0])
-            else:
-                log_warning(f"Seed artist '{name}' not found.")
-        except Exception as e:
-            log_warning(f"Artist search failed for '{name}': {e}")
-    return artists
+def collect_seed_artists(music_section, names):
+    found_artists = []
+    for name in names:
+        # 1. Try exact match first
+        matches = music_section.search(title=name, libtype='artist')
+        exact = next((a for a in matches if a.title.lower() == name.lower()), None)
+        
+        if not exact:
+            # 2. SAFETY: Try matching while ignoring spaces (e.g., "Davis,Jr." vs "Davis, Jr.")
+            normalized_name = name.replace(" ", "").lower()
+            exact = next((a for a in matches if a.title.replace(" ", "").lower() == normalized_name), None)
+
+        if exact:
+            found_artists.append(exact)
+            log_detail(f"Found seed artist: {exact.title}")
+        else:
+            log_detail(f"⚠️ Skipping: No library match for '{name}'")
+            
+    return found_artists
 
 
 # ---------------------------------------------------------------------------
@@ -866,17 +893,29 @@ def track_passes_static_filters(
             reject_reasons["duration"] += 1
             return False
 
+    # Force focus on Album Year
     album = resolve_album(track, plex)
     
-    if album and (min_year or max_year):
-        y = _album_year(album)
-        if y:
-            if min_year and y < min_year:
-                reject_reasons["year"] += 1
-                return False
-            if max_year and y > max_year:
-                reject_reasons["year"] += 1
-                return False
+    if min_year > 0 or max_year > 0:
+        # 1. Try to get year from Album
+        y = _album_year(album) if album else 0
+        
+        # 2. If Album Year is missing, try Track Year as a backup
+        if not y or y == 0:
+            y = getattr(track, 'year', 0) or 0
+
+        # 3. Final Check
+        if not y or y == 0:
+            # Only reject if we have NO date at all to verify
+            reject_reasons["year_missing"] += 1
+            return False
+            
+        if min_year > 0 and y < min_year:
+            reject_reasons["year_too_old"] += 1
+            return False
+        if max_year > 0 and y > max_year:
+            reject_reasons["year_too_new"] += 1
+            return False
 
     colls, genres = _album_collections_and_genres(album)
     
@@ -897,6 +936,55 @@ def track_passes_static_filters(
 # ---------------------------------------------------------------------------
 # Sonic expansion strategies (now static-filter aware)
 # ---------------------------------------------------------------------------
+
+def expand_strict_collection(music_section, collection_names, slider_val, limit):
+    all_possible_tracks = []
+
+    for col_name in collection_names:
+        try:
+            # 1. Fetch the collection object directly by title
+            # This works for both Smart and Regular collections
+            collection = music_section.collection(col_name)
+            
+            # 2. Get the items (Albums, Artists, or Tracks)
+            items = collection.items()
+            log_detail(f"Collection '{col_name}' found {len(items)} items.")
+            
+            for item in items:
+                if item.type == 'artist':
+                    for album in item.albums():
+                        all_possible_tracks.extend(album.tracks())
+                elif item.type == 'album':
+                    all_possible_tracks.extend(item.tracks())
+                elif item.type == 'track':
+                    all_possible_tracks.append(item)
+
+        except Exception as e:
+            log_warning(f"Direct fetch failed for collection '{col_name}': {e}")
+            # Optional: Fallback to the old search method if direct fetch fails
+
+    scored_list = []
+    now = datetime.now()
+    for track in all_possible_tracks:
+        # Recency: 180-day linear decay
+        age_days = (now - track.addedAt).days
+        r_score = max(0, 100 - (age_days * (100 / 180)))
+        
+        # Legacy: Plays + Rating
+        plays = getattr(track, 'viewCount', 0) or 0
+        l_score = min(100, (plays * 5) + ((track.userRating or 0) * 10))
+        
+        # Apply Slider
+        weight = (r_score * slider_val) + (l_score * (1.0 - slider_val))
+        
+        # New Music Boost
+        if slider_val > 0.5 and plays == 0:
+            weight += 30
+            
+        scored_list.append((track, weight))
+
+    scored_list.sort(key=lambda x: x[1], reverse=True)
+    return [t[0] for t in scored_list[:limit]]
 
 def expand_via_sonic_albums(
     seed_tracks: List[Track],
@@ -950,43 +1038,38 @@ def expand_via_sonic_albums(
         log_detail(f"Candidate albums (showing up to 20): {', '.join(names)}")
 
     results: List[Track] = []
+    # Loop through the 67 albums you found
     for album in expanded_albums:
-        t = pick_track_from_album(
-            album,
-            plex,
-            exploit_weight,
-            min_track,
-            min_album,
-            min_artist,
-            allow_unrated,
-            exclude_keys,
-            min_play_count,
-            max_play_count,
-            min_year,
-            max_year,
-            min_duration_sec,
-            max_duration_sec,
-            include_collections,
-            exclude_collections,
-            exclude_genres,
-        )
-        if t is not None:
-            results.append(t)
+        try:
+            # HARVEST up to 6 tracks from each album instead of picking 1
+            album_tracks = album.tracks()
+            count = 0
+            for t in album_tracks:
+                # Add basic safety check (not recently played)
+                rk = getattr(t, "ratingKey", None)
+                if rk and str(rk) not in kwargs.get('exclude_keys', set()):
+                    results.append(t)
+                    count += 1
+                
+                if count >= 6: # Max tracks per album cap
+                    break
+        except Exception:
+            continue
 
-    log_detail(f"Sonic albums → picked tracks: {len(results)}")
+    log_detail(f"Sonic albums → harvested tracks: {len(results)}")
     return results
 
 
-def expand_via_sonic_tracks(
+def expand_via_sonic_albums(
     seed_tracks: List[Track],
     plex: PlexServer,
     sonic_limit: int,
-    exploit_weight: float,   # kept for signature parity; not used here currently
+    exploit_weight: float,
     min_track: int,
     min_album: int,
     min_artist: int,
     allow_unrated: bool,
-    exclude_keys: Set[str],
+    exclude_keys: Set[str],  # This is already here!
     min_play_count: Optional[int],
     max_play_count: Optional[int],
     min_year: Optional[int],
@@ -997,56 +1080,54 @@ def expand_via_sonic_tracks(
     exclude_collections: Set[str],
     exclude_genres: Set[str],
 ) -> List[Track]:
-    results: List[Track] = []
+    # 1. Collect unique seed albums
+    albums: List[Album] = []
+    seen_albums: Set[str] = set()
     for t in seed_tracks:
-        sims = get_sonic_similar_tracks(t, limit=sonic_limit)
+        a = resolve_album(t, plex)
+        if isinstance(a, Album):
+            ak = getattr(a, "ratingKey", None)
+            if ak and ak not in seen_albums:
+                seen_albums.add(ak)
+                albums.append(a)
+
+    log_detail(f"Sonic albums: unique seed albums = {len(albums)}")
+
+    # 2. Expand to similar albums
+    expanded_albums: List[Album] = list(albums)
+    for album in albums:
+        sims = get_sonic_similar_albums(album, limit=sonic_limit)
         for s in sims:
-            if not isinstance(s, Track):
+            if not isinstance(s, Album):
                 continue
             rk = getattr(s, "ratingKey", None)
-            if not rk or rk in exclude_keys:
-                continue
+            if rk and rk not in seen_albums:
+                seen_albums.add(rk)
+                expanded_albums.append(s)
 
-            if not passes_min_ratings(
-                s, plex, min_track, min_album, min_artist, allow_unrated
-            ):
-                continue
+    log_detail(f"Sonic albums: total candidate albums = {len(expanded_albums)}")
 
-            if not passes_playcount(s, min_play_count, max_play_count):
-                continue
+    # 3. Harvest tracks from the albums
+    results: List[Track] = []
+    for album in expanded_albums:
+        try:
+            album_tracks = album.tracks()
+            count = 0
+            for t in album_tracks:
+                rk = getattr(t, "ratingKey", None)
+                # Check against the exclude_keys passed into the function
+                if rk and str(rk) not in exclude_keys:
+                    results.append(t)
+                    count += 1
+                
+                # Cap tracks per album to keep variety high
+                if count >= 6: 
+                    break
+        except Exception:
+            continue
 
-            album = resolve_album(s, plex)
-            year_val = _album_year(album)
-            if (min_year is not None or max_year is not None) and year_val is not None:
-                if min_year is not None and year_val < min_year:
-                    continue
-                if max_year is not None and year_val > max_year:
-                    continue
-
-            # Collections / genres (album-level only)
-            coll_names, album_genres = _album_collections_and_genres(album)
-            if include_collections and not coll_names.intersection(include_collections):
-                continue
-            if exclude_collections and coll_names.intersection(exclude_collections):
-                continue
-            if exclude_genres and album_genres.intersection(exclude_genres):
-                continue
-
-            # Duration
-            if min_duration_sec is not None or max_duration_sec is not None:
-                dur_ms = getattr(s, "duration", None)
-                if dur_ms is not None:
-                    dur_sec = int(dur_ms // 1000)
-                    if min_duration_sec is not None and dur_sec < min_duration_sec:
-                        continue
-                    if max_duration_sec is not None and dur_sec > max_duration_sec:
-                        continue
-
-            results.append(s)
-
-    log_detail(f"Sonic tracks → picked tracks: {len(results)}")
+    log_detail(f"Sonic albums → harvested tracks: {len(results)}")
     return results
-
 
 def expand_via_sonic_artists(
     seed_artists: List[Artist],
@@ -1092,29 +1173,24 @@ def expand_via_sonic_artists(
 
     results: List[Track] = []
     for artist in artists:
-        t = pick_track_from_artist(
-            artist,
-            plex,
-            exploit_weight,
-            min_track,
-            min_album,
-            min_artist,
-            allow_unrated,
-            exclude_keys,
-            min_play_count,
-            max_play_count,
-            min_year,
-            max_year,
-            min_duration_sec,
-            max_duration_sec,
-            include_collections,
-            exclude_collections,
-            exclude_genres,
-        )
-        if t is not None:
-            results.append(t)
+        # INSTEAD OF pick_track_from_artist (which is 1-or-0)
+        # Try to get ALL valid tracks from the artist
+        try:
+            all_t = artist.tracks()
+            valid_from_this_artist = 0
+            for track in all_t:
+                # Apply your filters here or in a helper
+                if track.ratingKey not in exclude_keys:
+                    results.append(track)
+                    valid_from_this_artist += 1
+                
+                # Stop after 5-10 tracks so the artist doesn't dominate
+                if valid_from_this_artist >= 25: 
+                    break
+        except Exception:
+            continue
 
-    log_detail(f"Sonic artists → picked tracks: {len(results)}")
+    log_detail(f"Sonic artists → harvested tracks: {len(results)}")
     return results
 
 
@@ -1258,6 +1334,7 @@ def build_playlist_description(
 
 def main() -> int:
     start_time = time.time()  # Start the clock
+    final_tracks = []
 
     # Read JSON payload from stdin
     try:
@@ -1293,6 +1370,8 @@ def main() -> int:
     min_artist = int(min_rating.get("artist", 0))
     allow_unrated = bool(pl_cfg.get("allow_unrated", 1))
 
+    new_vs_legacy_slider = float(pl_cfg.get("new_vs_legacy_slider", 0.5))
+
     def _parse_optional_int(val, zero_means_none: bool = False, default_none: bool = True) -> Optional[int]:
         try:
             iv = int(val)
@@ -1320,7 +1399,35 @@ def main() -> int:
     genre_seeds = [str(g).strip() for g in (pl_cfg.get("genre_seeds", []) or []) if str(g).strip()]
 
     seed_mode = (pl_cfg.get("seed_mode") or "").strip().lower()
+
     custom_title = (pl_cfg.get("custom_title") or "").strip()
+    preset_name = (pl_cfg.get("preset_name") or "").strip()
+
+    # 1. First, determine the time period
+    period = "Anytime"
+    if use_time_periods:
+        period = get_current_period() # Assuming this helper exists in your script
+
+    # 2. NOW build the title (Now that 'period' and 'custom_title' are ready)
+    title = build_playlist_title(
+        seed_mode, 
+        period, 
+        custom_title=custom_title
+    )
+
+    # ------------------------------------------------------------------
+    # ... [The rest of the script runs here: Step 1, Step 2, Step 3] ...
+    # ------------------------------------------------------------------
+
+    # 3. ONLY at the very end, once final_tracks is actually built:
+    if final_tracks:
+        description = build_playlist_description(
+            seed_mode, 
+            period, 
+            final_tracks, 
+            plex,
+            preset_name=preset_name
+        )
 
     min_year = int(pl_cfg.get("min_year") or 0)
     max_year = int(pl_cfg.get("max_year") or 0)
@@ -1331,7 +1438,6 @@ def main() -> int:
     recently_added_weight = float(pl_cfg.get("recently_added_weight", 0.0))
     recently_added_weight = max(0.0, min(1.0, recently_added_weight))
 
-    # FIX (Step A): Treat 0 as None (no cap) to avoid rejecting all tracks
     max_tracks_per_artist = _parse_optional_int(pl_cfg.get("max_tracks_per_artist", 0), zero_means_none=True)
     max_tracks_per_album = _parse_optional_int(pl_cfg.get("max_tracks_per_album", 0), zero_means_none=True)
 
@@ -1390,6 +1496,9 @@ def main() -> int:
     use_sonic_artists = False
     use_sonic_tracks = False
 
+    # 1. Initialize the slider default at the top of the block
+    new_vs_legacy_slider = 0.5
+
     if not seed_mode:
         if seed_playlist_names or seed_collection_names or seed_artist_names or seed_track_keys:
             seed_mode = "sonic_album_mix"
@@ -1402,6 +1511,11 @@ def main() -> int:
         use_sonic_albums = True
     elif seed_mode == "sonic_artist_mix":
         use_sonic_artists = True
+    elif seed_mode == "strict_collection":
+        # New mode: No sonic flags needed as it uses a custom harvester
+        use_sonic_albums = False
+        use_sonic_artists = False
+        new_vs_legacy_slider = float(pl_cfg.get("new_vs_legacy_slider", 0.5))
     elif seed_mode == "sonic_combo":
         use_sonic_albums = True
         use_sonic_artists = True
@@ -1487,6 +1601,7 @@ def main() -> int:
 
     if seed_mode == "genre":
         seed_tracks.extend(genre_tracks)
+
     seed_source_counts["genres"] += len(genre_tracks)
 
     # History seeds (if seed_mode uses history as seeds, or for fallback)
@@ -1505,11 +1620,58 @@ def main() -> int:
         seed_tracks.extend(history_seeds)
     seed_source_counts["history"] += len(history_seeds)
 
-    # Artist seeds (for sonic artists)
+    # Use the value from the JSON config, default to empty string if missing
+    artist_input_string = pl_cfg.get("seed_artist_names", "")
+    
+    # If it's already a list (from JSON), join it; if it's a string, use it
+    if isinstance(artist_input_string, list):
+        artist_input_string = ",".join(artist_input_string)
+
+    f = io.StringIO(artist_input_string)
+    # skipinitialspace=True helps handle spaces after commas
+    reader = csv.reader(f, skipinitialspace=True)
+
+    try:
+        raw_names = next(reader)
+        # This strips spaces AND extra single/double quotes from the edges of names
+        seed_artist_names = [n.strip(" '\"") for n in raw_names if n.strip()]
+    except StopIteration:
+        seed_artist_names = []
+
+    # 3. THE "JR." SAFETY NET
+    # If the parser split "Sammy Davis, Jr." into ["Sammy Davis", "Jr."]
+    # this logic glues them back together correctly for Plex.
+    final_names = []
+    for name in seed_artist_names:
+        # Check if the current bit is just 'Jr' or 'Jr.'
+        if name.lower().rstrip('.') == "jr" and final_names:
+            # Re-attach to the previous name with the exact library formatting
+            final_names[-1] = f"{final_names[-1]}, Jr."
+        else:
+            final_names.append(name)
+    
+    seed_artist_names = final_names
+    log_detail(f"Parsed artist names: {seed_artist_names}")
+
+    # LOGGING: See exactly what the parser produced
+    if seed_artist_names:
+        log_detail(f"Parsed artist names: {seed_artist_names}")
+
     seed_artists = collect_seed_artists(music_section, seed_artist_names)
     seed_source_counts["artists"] += len(seed_artists)
 
-    # Deduplicate seeds by ratingKey
+    # Turn Artists into Seed Tracks
+    for artist in seed_artists:
+        try:
+            # Grab tracks and filter out any None types just in case
+            artist_tracks = [tr for tr in artist.tracks() if tr]
+            # Take up to 5 tracks as the 'sonic profile' for this artist
+            seed_tracks.extend(artist_tracks[:5])
+            log_detail(f"Added {len(artist_tracks[:5])} seed tracks for artist: {artist.title}")
+        except Exception as e:
+            log_detail(f"Could not get tracks for artist {getattr(artist, 'title', 'Unknown')}: {e}")
+
+    # Deduplicate seeds
     seen_seed_keys: Set[str] = set()
     unique_seeds: List[Track] = []
     for t in seed_tracks:
@@ -1537,13 +1699,14 @@ def main() -> int:
     #         to history or genre for additional seeds.
     # ------------------------------------------------------------------
     MIN_SEEDS = 10
-    if len(seed_tracks) < MIN_SEEDS:
+    # ONLY do this if we aren't in strict_collection mode!
+    if seed_mode != "strict_collection" and len(seed_tracks) < MIN_SEEDS:
         log_detail(
             f"Seeds below minimum ({len(seed_tracks)} < {MIN_SEEDS}); "
             f"using fallback='{seed_fallback_mode}'."
         )
         if seed_fallback_mode == "history":
-            for t in history_seeds:
+             for t in history_seeds:
                 rk = getattr(t, "ratingKey", None)
                 if rk and rk not in seen_seed_keys:
                     seen_seed_keys.add(rk)
@@ -1554,6 +1717,8 @@ def main() -> int:
                 if rk and rk not in seen_seed_keys:
                     seen_seed_keys.add(rk)
                     seed_tracks.append(t)
+    elif seed_mode == "strict_collection":
+        log_detail("Strict Mode: Skipping fallback to ensure playlist stays pure.")
 
     # ------------------------------------------------------------------
     # Step 3: Expand from seeds via sonic / echoes / genre balancing
@@ -1562,6 +1727,23 @@ def main() -> int:
     log_status(35, "Expanding from seeds...")
 
     candidates: List[Track] = []
+
+    if seed_mode == "strict_collection" and include_collections:
+        log_status(35, f"Expanding via Strict Collection (Slider: {new_vs_legacy_slider})...")
+        
+        # 1. Run the function and store tracks in strict_results
+        strict_results = expand_strict_collection(
+            music_section, 
+            include_collections, 
+            new_vs_legacy_slider,
+            max_tracks * 4
+        )
+        
+        # 2. Add those results to the main 'candidates' list
+        # Use strict_results here!
+        candidates.extend(strict_results) 
+        
+        log_detail(f"Strict collection -> Added {len(strict_results)} candidates to pool.")
 
     # Sonic albums
     if use_sonic_albums and seed_tracks:
@@ -1672,43 +1854,86 @@ def main() -> int:
     # Always let the original seeds be eligible too
     candidates.extend(seed_tracks)
 
-    # ------------------------------------------------------------------
-    # Step 4: High-Performance Album-Genre Search
-    # ------------------------------------------------------------------
-    log_status(50, f"Querying Plex for {min_year}-{max_year} {genre_seeds}...")
+    # ---------------------------------------------------------
+    # STEP 4: UNIFIED FILTERING
+    # ---------------------------------------------------------
+    raw_candidates = []
 
-    filters = {}
-    if min_year > 0:
-        filters['year>>='] = min_year
-    if max_year > 0:
-        filters['year<<='] = max_year
+    if seed_mode == "strict_collection":
+        raw_candidates = candidates # From your Step 3
     
-    # CRITICAL CHANGE: Search for the genre on the ALBUM, not the track
-    if genre_seeds:
-        filters['album.genre'] = genre_seeds
+    elif seed_mode == "genre":
+        raw_candidates = genre_tracks # From your Step 1
+        
+    elif seed_mode == "sonic_artist_mix":
+        # This uses the 300 tracks you just harvested!
+        raw_candidates = sonic_artist_tracks 
 
-    # This will now find every track belonging to those 1,312 Rock albums
-    candidates = music_section.search(libtype='track', filters=filters)
-    
+    elif seed_mode == "sonic_album_mix":
+        raw_candidates = sonic_album_tracks if 'sonic_album_tracks' in locals() else []
+
+    elif seed_mode == "track_sonic":
+        raw_candidates = sonic_tracks
+        
+    else:
+        # Default fallback for History or other standard modes
+        raw_candidates = history_seeds
+
+    log_status(50, f"Filtering {len(raw_candidates)} candidates for {seed_mode}...")
+
+    # Now we run ONE filtering loop that applies to EVERYTHING
     filtered = []
-    for t in candidates:
-        if t.ratingKey in excluded_keys:
-            continue
-            
-        t_rating = getattr(t, 'userRating', 0) or 0
-        if not allow_unrated and t_rating < min_track:
-            continue
-            
-        filtered.append(t)
+    seen_ids = set()
+    required_genres = [g.lower() for g in genre_seeds]
+    reject_reasons = Counter()
 
-    unique_map = {t.ratingKey: t for t in filtered}
-    filtered = list(unique_map.values())
+    for t in raw_candidates:
+        if track_passes_static_filters(
+            t, plex, seen_ids, excluded_keys,
+            min_track, min_album, min_artist, allow_unrated,
+            min_play_count, max_play_count,
+            min_year, max_year,
+            min_duration_sec, max_duration_sec,
+            include_collections, exclude_collections, exclude_genres,
+            reject_reasons
+        ):
+            # --- PRIORITY GENRE CHECK (Short-Circuit) ---
+            candidate_genres = []
+            
+            try:
+                # 1. Check Track Level
+                t_genres = [g.tag.lower() for g in getattr(t, 'genres', [])]
+                if t_genres:
+                    candidate_genres = t_genres
+                else:
+                    # 2. Check Album Level if Track was empty
+                    album = t.album()
+                    al_genres = [g.tag.lower() for g in getattr(album, 'genres', [])]
+                    if al_genres:
+                        candidate_genres = al_genres
+                    else:
+                        # 3. Check Artist Level if Album was empty
+                        artist = t.artist()
+                        candidate_genres = [g.tag.lower() for g in getattr(artist, 'genres', [])]
+
+                # Now, if we have a required genre (like 'Jazz'), check our best found level
+                if required_genres:
+                    if not any(rg in candidate_genres for rg in required_genres):
+                        reject_reasons["wrong_genre_filtered"] += 1
+                        continue
+                        
+            except Exception as e:
+                # Fallback if metadata is totally missing or inaccessible
+                continue
+            # ---------------------------------------------
+
+            filtered.append(t)
+
+    log_detail(f"Final pool size: {len(filtered)} tracks.")
     
-    log_detail(f"Advanced Filter complete: {len(filtered)} tracks found from Rock albums.")
-
-    if not filtered:
-        log("ERROR: No tracks available after filtering.")
-        return 4
+    # This line is super helpful for debugging:
+    if reject_reasons:
+        log_detail(f"Filter Rejections: {dict(reject_reasons)}")
 
     # ------------------------------------------------------------------
     # Step 5: Recency bias + artist/album caps + genre strict
@@ -1752,35 +1977,52 @@ def main() -> int:
         if not pool: break
         t = pool.pop(random.randrange(len(pool)))
 
-        artist_name = _artist_name(t)
-        album_key, album_genres = _album_key_and_genres(t)
-
-        # Genre Check
-        on_genre = True
-        if seed_genre_set:
-            if not album_genres.intersection(seed_genre_set):
-                on_genre = False
-
-        if genre_strict and seed_genre_set and not on_genre:
-            if off_limit is not None and off_genre_count >= off_limit:
-                shaping_rejections["genre_mismatch_limit"] += 1
+        # --- THE FIX: BYPASS FOR STRICT MODE ---
+        if seed_mode == "strict_collection":
+            # In strict mode, we trust the harvester. No collection/genre checks needed.
+            on_genre = True 
+        else:
+            # ORIGINAL BOUNCER LOGIC
+            album = resolve_album(t, plex)
+            colls, _ = _album_collections_and_genres(album)
+            
+            if include_collections and not colls.intersection(include_collections):
+                shaping_rejections["not_in_included_collection"] += 1
                 continue
 
-        # Diversity Checks
+            artist_name = _artist_name(t)
+            album_key, album_genres = _album_key_and_genres(t)
+
+            on_genre = True
+            if seed_genre_set and not album_genres.intersection(seed_genre_set):
+                on_genre = False
+
+            if genre_strict and seed_genre_set and not on_genre:
+                if off_limit is not None and off_genre_count >= off_limit:
+                    shaping_rejections["genre_mismatch_limit"] += 1
+                    continue
+
+        # Diversity Checks (Still helpful in Strict Mode to prevent 50 songs from 1 album)
+        artist_name = _artist_name(t)
+        album_key, _ = _album_key_and_genres(t)
         if max_tracks_per_artist is not None and artist_counts[artist_name] >= max_tracks_per_artist:
-            shaping_rejections["artist_cap_reached"] += 1
             continue
         if max_tracks_per_album is not None and album_key and album_counts[album_key] >= max_tracks_per_album:
-            shaping_rejections["album_cap_reached"] += 1
             continue
 
+        # SUCCESS: Add the track
         final_tracks.append(t)
         artist_counts[artist_name] += 1
         if album_key: album_counts[album_key] += 1
         if not on_genre: off_genre_count += 1
 
-        if not final_tracks:
-            log("ERROR: Shaping loop resulted in 0 tracks. Check diversity/genre settings.")
+    # --- THE SAFETY NET (OUTSIDE THE LOOP) ---
+    if not final_tracks:
+        if seed_mode == "strict_collection":
+            log("⚠️ Shaping loop failed. Using raw candidates as fallback.")
+            final_tracks = filtered[:max_tracks]
+        else:
+            log("❌ ERROR: Shaping loop resulted in 0 tracks. Check filters.")
             return 5
 
     # ------------------------------------------------------------------

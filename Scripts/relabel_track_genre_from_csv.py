@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, json, re
+import os, sys, json, re, time
 import pandas as pd
 from plexapi.server import PlexServer
 
@@ -47,6 +47,15 @@ def parse_genre_cell(cell: str):
             out.append(g)
     return out
 
+def print_progress_bar(iteration, total, prefix='', suffix='', length=40, fill='█'):
+    """Call in a loop to create terminal progress bar"""
+    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
+    filled_length = int(length * iteration // total)
+    bar = fill * filled_length + '-' * (length - filled_length)
+    # The \r at the start is what brings the cursor back to the beginning of the line
+    sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {suffix}')
+    sys.stdout.flush() # This forces the terminal to show the bar NOW
+
 # ---------- main ----------
 def main():
     base = env("PLEX_BASEURL", "PLEX_URL")
@@ -75,34 +84,51 @@ def main():
         sys.exit(4)
 
     df = df[df[genre_col].notna() & (df[genre_col].astype(str).str.strip() != "")]
-    print(f"🎯 Processing {len(df)} tracks...", flush=True)
+    total_tracks = len(df)
+    # Debug: Confirming we found tracks
+    if total_tracks == 0:
+        print("No tracks found to process. Check your CSV and column names.")
+        return
+
+    print(f"🎯 Processing {total_tracks} tracks...", flush=True)
 
     edited, skipped = 0, 0
-    for _, row in df.iterrows():
+    start_time = time.time()
+
+    for i, (_, row) in enumerate(df.iterrows()):
         try:
             tid = int(row[id_col])
             want_genres = parse_genre_cell(row[genre_col])
             track = plex.fetchItem(tid)
             
-            # For Tracks, we use the .edit() method to LOCK the metadata
-            if dry_run:
-                print(f"[DRY-RUN] Track: {track.title} -> {want_genres}")
-            else:
-                # Plex API syntax for locking track genres
+            if not dry_run:
                 edits = {"genre.locked": 1}
-                for i, g in enumerate(want_genres):
-                    edits[f"genre[{i}].tag.tag"] = g
+                for idx, g in enumerate(want_genres):
+                    edits[f"genre[{idx}].tag.tag"] = g
                 
-                # Applying the edit
                 track.edit(**edits)
-                print(f"✅ Updated & Locked: {track.title}")
                 edited += 1
+                time.sleep(1) 
+            
+            # Progress Logic
+            elapsed = time.time() - start_time
+            # Calculate estimation only after the first item to avoid divide by zero
+            remaining = (elapsed / (i + 1)) * (total_tracks - (i + 1))
+            min_rem = int(remaining // 60)
+            sec_rem = int(remaining % 60)
+            
+            # Update the bar
+            suffix_text = f"({i+1}/{total_tracks}) - {min_rem}m {sec_rem}s left"
+            print_progress_bar(i + 1, total_tracks, prefix='Progress:', suffix=suffix_text)
 
         except Exception as e:
+            # Move to a new line before printing the error so the bar isn't overwritten
+            sys.stdout.write('\n')
             print(f"❌ Error Track_ID={row.get(id_col)}: {e}")
             skipped += 1
 
-    print(f"Done. Edited={edited} Skipped={skipped}", flush=True)
+    print(f"\n\nDone. Edited={edited} Skipped={skipped}")
+    print(f"Total time: {int((time.time() - start_time) // 60)}m {int((time.time() - start_time) % 60)}s")
 
 if __name__ == "__main__":
     main()

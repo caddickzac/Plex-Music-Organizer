@@ -795,7 +795,7 @@ def apply_preset_to_session(preset: dict) -> None:
     keys = [
         "pc_lib",
         "pc_custom_title",
-
+        "pc_preset_name", 
         "pc_exclude_days",
         "pc_lookback_days",
         "pc_max_tracks",
@@ -849,6 +849,17 @@ def apply_preset_to_session(preset: dict) -> None:
 # Playlist Creator tab (with presets)
 # ---------------------------
 def ui_playlist_creator_tab(cfg: AppConfig):
+    # 1. HANDLE LOADING FIRST (Before any widgets are instantiated)
+    if "pc_preset_select" in st.session_state:
+        # Check if the load button was pressed
+        if st.get_option("server.runOnSave") or st.session_state.get("pc_btn_load"):
+             selected_preset = st.session_state.get("pc_preset_select")
+             if selected_preset and selected_preset != "<none>":
+                 preset = load_preset_dict(selected_preset)
+                 if preset:
+                     # This will now work because the widgets haven't been "drawn" yet
+                     apply_preset_to_session(preset)
+                     
     st.subheader("Playlist Creator (sonic similarity + custom seeds)")
 
     st.caption(
@@ -866,6 +877,16 @@ def ui_playlist_creator_tab(cfg: AppConfig):
     existing_presets = list_presets()
     preset_options = ["<none>"] + existing_presets
 
+    # CALLBACK FUNCTION: This runs BEFORE the widgets are drawn
+    def handle_load_preset():
+        sel = st.session_state.get("pc_preset_select")
+        if sel and sel != "<none>":
+            preset = load_preset_dict(sel)
+            if preset:
+                apply_preset_to_session(preset)
+                # Note: st.success and st.experimental_rerun aren't 
+                # strictly needed inside a callback, but you can keep them.
+
     col_p1, col_p2 = st.columns([2, 2])
     with col_p1:
         selected_preset = st.selectbox(
@@ -875,6 +896,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             key="pc_preset_select",
         )
     with col_p2:
+        # This widget is now safe because handle_load_preset runs BEFORE this line
         preset_name = st.text_input(
             "Preset name (for saving)",
             value=st.session_state.get("pc_preset_name", ""),
@@ -884,14 +906,8 @@ def ui_playlist_creator_tab(cfg: AppConfig):
 
     col_pb1, col_pb2 = st.columns(2)
     with col_pb1:
-        if st.button("Load preset", key="pc_btn_load") and selected_preset != "<none>":
-            preset = load_preset_dict(selected_preset)
-            if preset:
-                apply_preset_to_session(preset)
-                st.success(f"Loaded preset: {selected_preset}")
-                st.experimental_rerun()
-            else:
-                st.warning(f"Preset '{selected_preset}' could not be loaded.")
+        # Use on_click to trigger the callback
+        st.button("Load preset", key="pc_btn_load", on_click=handle_load_preset)
 
     with col_pb2:
         if st.button("Save current settings as preset", key="pc_btn_save"):
@@ -903,7 +919,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
                 preset_keys = [
                     "pc_lib",
                     "pc_custom_title",
-
+                    "pc_preset_name",
                     "pc_exclude_days",
                     "pc_lookback_days",
                     "pc_max_tracks",
@@ -1287,6 +1303,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "Sonic Combo (Albums + Artists)",
         "Album Echoes (seed albums only)",
         "Sonic Tracks (track-level similarity)",
+        "Strict Collection"
     ]
 
     seed_mode_label = st.selectbox(
@@ -1306,7 +1323,6 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         ),
     )
 
-
     seed_mode_map = {
         "Auto (infer from seeds/history)": "",
         "History only": "history",
@@ -1316,8 +1332,29 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "Sonic Combo (Albums + Artists)": "sonic_combo",
         "Album Echoes (seed albums only)": "album_echoes",
         "Sonic Tracks (track-level similarity)": "track_sonic",
+        "Strict Collection": "strict_collection",
     }
     seed_mode = seed_mode_map[st.session_state["pc_seed_mode_label"]]
+
+
+    # Slider initialization
+    new_vs_legacy_slider = 0.5
+
+    if seed_mode == "strict_collection":
+        st.divider()
+        st.markdown("### 🎚️ Curator Controls")
+        new_vs_legacy_slider = st.slider(
+            "Playlist Balance: Legacy vs. New",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.5,
+            step=0.05,
+            help="1.0 (New) forces tracks added in the last 180 days to the top. 0.0 (Legacy) favors high play counts and ratings."
+        )
+        col1, col2 = st.columns(2)
+        col1.caption("⬅️ Legacy Staples")
+        col2.markdown("<p style='text-align: right; color: gray; font-size: small;'>Fresh Blood ➡️</p>", unsafe_allow_html=True)
+        st.divider()
 
     st.markdown("### Seed sources")
 
@@ -1398,7 +1435,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "token": cfg.plex_token,
             "music_library": music_lib,
         },
-                "playlist": {
+        "playlist": {
             "exclude_played_days": int(exclude_days),
             "history_lookback_days": int(lookback_days),
             "max_tracks": int(max_tracks),
@@ -1418,6 +1455,8 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "use_time_periods": 1 if use_time_periods else 0,
             "seed_fallback_mode": seed_fallback_mode.lower(),
             "seed_mode": seed_mode,
+
+            "new_vs_legacy_slider": new_vs_legacy_slider,
 
             # play count filters
             "min_play_count": int(min_play_count),
