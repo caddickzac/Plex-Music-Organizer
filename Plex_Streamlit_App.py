@@ -105,7 +105,6 @@ def scripts_signature() -> str:
             pass
     return h.hexdigest()
 
-@st.cache_data(show_spinner=False)
 def discover_scripts(include_exports: bool = True, _sig: str = "") -> Dict[str, ScriptInfo]:
     """
     Discover scripts in SCRIPTS_DIR. Optional sidecar JSON per script:
@@ -1410,25 +1409,6 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "Playlist Creator will create a **new playlist** in Plex but will not edit "
         "metadata or existing playlists."
     )
-
-    run_btn = st.button("Generate Playlist", type="primary", key="pc_run")
-    if not run_btn:
-        return
-
-    st.divider()
-    st.markdown("### Playlist Creator log")
-    log_box = st.empty()
-    log_lines: List[str] = []
-
-    env = os.environ.copy()
-    env.update({
-        "PLEX_BASEURL": cfg.plex_baseurl,
-        "PLEX_URL": cfg.plex_baseurl,
-        "PLEX_TOKEN": cfg.plex_token,
-        "PYTHONIOENCODING": "utf-8",
-        "PYTHONUTF8": "1",
-    })
-
     payload = {
         "plex": {
             "url": cfg.plex_baseurl,
@@ -1498,6 +1478,31 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "genre_seeds": genre_seeds,
         },
     }
+
+    st.divider()
+
+    # --- 3. SHOW RUN BUTTON ---
+    run_btn = st.button("Generate Playlist (Run on Laptop)", type="primary", key="pc_run")
+    
+    # Stop here if the user hasn't clicked Run
+    if not run_btn:
+        return
+
+    # --- Execution Logic (Below this remains mostly the same) ---
+    st.markdown("### Playlist Creator log")
+
+    log_box = st.empty()
+    log_lines = []
+
+    env = os.environ.copy()
+    env.update({
+        "PLEX_BASEURL": cfg.plex_baseurl,
+        "PLEX_URL": cfg.plex_baseurl,
+        "PLEX_TOKEN": cfg.plex_token,
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+    })
+
 
     try:
         proc = subprocess.Popen(
