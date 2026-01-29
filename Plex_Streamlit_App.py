@@ -1032,6 +1032,12 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             step=1,
             key="pc_sonic_limit",
         )
+        deep_dive_target = st.number_input(
+            "Deep Dive Target (Seeds per Artist)", 
+            min_value=1, max_value=100, value=15, step=1,
+            key="pc_deep_dive_target",
+            help="Only for 'Deep Dive' mode. How many distinct tracks to harvest from a Seed Artist to ensure we cover their discography."
+        )
         historical_ratio = st.slider(
             "Historical ratio (fraction of tracks from history)",
             0.0,
@@ -1295,43 +1301,47 @@ def ui_playlist_creator_tab(cfg: AppConfig):
 
     seed_options = [
         "Auto (infer from seeds/history)",
-        "History only",
+        "Deep Dive (Seed Albums)",
         "Genre seeds",
-        "Sonic Album Mix",
+        "History + Seeds (Union)",
         "Sonic Artist Mix",
+        "Sonic Album Mix",
+        "Sonic Tracks Mix",
         "Sonic Combo (Albums + Artists)",
-        "Album Echoes (seed albums only)",
-        "Sonic Tracks (track-level similarity)",
+        "Sonic History (Intersection)",        
         "Strict Collection"
     ]
 
     seed_mode_label = st.selectbox(
         "Seed mode",
         seed_options,
-        index=0,
-        key="pc_seed_mode_label",   # 👈 critical
+        index=3,
+        key="pc_seed_mode_label",
         help=(
             "How to build the core candidate set:\n"
-            "- Auto: let the script infer based on provided seeds and history\n"
-            "- History only: build from listening history\n"
-            "- Genre seeds: use genre_seeds only\n"
-            "- Sonic Album/Artist: seed + sonically similar albums/artists\n"
-            "- Sonic Combo: both sonic albums and sonic artists\n"
-            "- Album Echoes: one track per seed album, no extra sonic expansion\n"
-            "- Sonic Tracks: expand directly from seed tracks via sonicallySimilar()"
+            "- Auto: Script infers mode based on provided seeds.\n"
+            "- Deep Dive: Deep search into the discography of your seed albums/artists (Mini-Box Set).\n"
+            "- Genre seeds: Songs matching the specific genres.\n"
+            "- History + Seeds: Your recent history PLUS any specific seeds you add (Union).\n"
+            "- Sonic Album/Artist: Seed + sonically similar albums/artists (Broad).\n"
+            "- Sonic Combo: Expands via both similar albums and artists (Dense).\n"
+            "- Sonic History: Only tracks from your history that sound like your seeds (Intersection).\n"
+            "- Sonic Tracks: Strict, dynamic expansion directly from seed tracks (track-to-track similarity).\n"
+            "- Strict Collection: Only tracks from the specified collections (Curator Mode)."
         ),
     )
 
     seed_mode_map = {
         "Auto (infer from seeds/history)": "",
-        "History only": "history",
+        "Deep Dive (Seed Albums)": "album_echoes",
         "Genre seeds": "genre",
-        "Sonic Album Mix": "sonic_album_mix",
+        "History + Seeds (Union)": "history",
         "Sonic Artist Mix": "sonic_artist_mix",
+        "Sonic Album Mix": "sonic_album_mix",
+        "Sonic Tracks Mix": "track_sonic",  #
         "Sonic Combo (Albums + Artists)": "sonic_combo",
-        "Album Echoes (seed albums only)": "album_echoes",
-        "Sonic Tracks (track-level similarity)": "track_sonic",
-        "Strict Collection": "strict_collection",
+        "Sonic History (Intersection)": "sonic_history",
+        "Strict Collection": "strict_collection"
     }
     seed_mode = seed_mode_map[st.session_state["pc_seed_mode_label"]]
 
@@ -1482,7 +1492,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
     st.divider()
 
     # --- 3. SHOW RUN BUTTON ---
-    run_btn = st.button("Generate Playlist (Run on Laptop)", type="primary", key="pc_run")
+    run_btn = st.button("Generate Playlist", type="primary", key="pc_run")
     
     # Stop here if the user hasn't clicked Run
     if not run_btn:
