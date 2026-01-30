@@ -1,2 +1,2 @@
-Plex URL: "http://192.168.1.174:32400/"
-Plex Token: "eRQTDTR6M8ypgEq-HMqU"
+Plex URL: ""
+Plex Token: ""
