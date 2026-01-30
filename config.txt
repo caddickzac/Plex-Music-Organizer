@@ -1,0 +1,3 @@
+Plex URL: http://YOUR_LOCAL_IP:32400
+Plex Token: YOUR_NEW_TOKEN_HERE
+Plex Library: Music
