@@ -805,6 +805,197 @@ def expand_album_echoes(seed_tracks, plex, exclude_keys, filter_criteria, **kwar
 
     return results
 
+
+# ---------------------------------------------------------------------------
+# SONIC JOURNEY & SMOOTHING
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# SONIC JOURNEY & SMOOTHING
+# ---------------------------------------------------------------------------
+
+def find_sonic_path(start_track: Track, end_track: Track, plex: PlexServer, max_depth: int = 5, width: int = 20) -> Optional[List[Track]]:
+    """
+    Attempts to find a 'Six Degrees' sonic path between two tracks using BFS.
+    Returns None if no path is found.
+    """
+    if start_track.ratingKey == end_track.ratingKey:
+        return [start_track]
+    
+    # Queue: List of paths (each path is a list of Tracks)
+    queue = [[start_track]]
+    visited = {start_track.ratingKey}
+    
+    target_key = end_track.ratingKey
+    max_nodes = 2000 # Safety brake to prevent infinite API calls
+    nodes_visited = 0
+
+    log_detail(f"Pathfinding: {start_track.title} -> {end_track.title} (Max Depth {max_depth}, Width {width})")
+
+    while queue:
+        path = queue.pop(0)
+        current_node = path[-1]
+        
+        # Stop if path gets too long
+        if len(path) > max_depth + 1:
+            continue
+            
+        # Stop if we've burnt too many API calls
+        if nodes_visited > max_nodes:
+            log_detail("Pathfinding: Max node limit reached.")
+            break
+
+        # Get neighbors
+        try:
+            neighbors = get_sonic_similar_tracks(current_node, limit=width)
+            nodes_visited += 1
+        except:
+            continue
+
+        for neighbor in neighbors:
+            if neighbor.ratingKey == target_key:
+                return path + [neighbor]
+            
+            if neighbor.ratingKey not in visited:
+                visited.add(neighbor.ratingKey)
+                new_path = list(path)
+                new_path.append(neighbor)
+                queue.append(new_path)
+    
+    # Path not found
+    return None
+
+def inflate_path(path: List[Track], target_count: int, plex: PlexServer) -> List[Track]:
+    """
+    Takes a skeletal path and 'fattens' it with neighbors to reach target_count.
+    """
+    if len(path) >= target_count: 
+        return path
+    
+    # Calculate how many neighbors we need per track in the path
+    needed = target_count - len(path)
+    # Add a buffer (+2) to ensure we hit the target despite duplicates
+    per_node = int(needed / len(path)) + 2
+    
+    inflated = []
+    seen = {t.ratingKey for t in path}
+    
+    for track in path:
+        inflated.append(track)
+        
+        # Flesh out this waypoint with neighbors
+        try:
+            neighbors = get_sonic_similar_tracks(track, limit=per_node + 5)
+            count = 0
+            for n in neighbors:
+                if n.ratingKey not in seen:
+                    inflated.append(n)
+                    seen.add(n.ratingKey)
+                    count += 1
+                if count >= per_node: 
+                    break
+        except: pass
+        
+    return inflated
+
+def expand_sonic_journey(seed_tracks, plex, target_count: int = 50, **kwargs) -> List[Track]:
+    """
+    Connects seeds with a path, then inflates that path to meet target_count.
+    """
+    if len(seed_tracks) < 2:
+        return seed_tracks
+
+    # Divide the target count by the number of "legs" in the journey
+    # e.g. 50 tracks, 2 seeds (1 leg) -> target 50 for the A->B trip
+    legs = len(seed_tracks) - 1
+    per_leg_target = max(5, int(target_count / legs))
+
+    full_journey = []
+    
+    for i in range(legs):
+        start = seed_tracks[i]
+        end = seed_tracks[i+1]
+        
+        # 1. Try Pathfinding
+        path = find_sonic_path(start, end, plex, max_depth=4, width=15)
+        
+        segment = []
+        if path:
+            # Path found! Check if it's long enough.
+            if len(path) < per_leg_target:
+                log_detail(f"Path found ({len(path)} tracks). Inflating to ~{per_leg_target}...")
+                segment = inflate_path(path, per_leg_target, plex)
+            else:
+                segment = path
+        else:
+            # 2. Fallback Bridge (Inflated by default)
+            log_warning(f"⚠️ No path {start.title}->{end.title}. Bridging {per_leg_target} tracks.")
+            
+            # Grab half from A, half from B
+            half = int(per_leg_target / 2) + 2
+            bridge_a = get_sonic_similar_tracks(start, limit=half)
+            bridge_b = get_sonic_similar_tracks(end, limit=half)
+            
+            segment = [start] + bridge_a + bridge_b + [end]
+
+        # 3. Stitch it together
+        if full_journey:
+            # If the last track of journey is the same as first of segment, skip first of segment
+            if full_journey[-1].ratingKey == segment[0].ratingKey:
+                full_journey.extend(segment[1:])
+            else:
+                full_journey.extend(segment)
+        else:
+            full_journey.extend(segment)
+            
+    return full_journey
+
+def smooth_playlist_gradient(tracks: List[Track], plex: PlexServer) -> List[Track]:
+    """
+    Reorders a list of tracks to create a sonic gradient.
+    Greedy Algorithm: Always pick the next track that is most sonically similar to the current one.
+    """
+    if len(tracks) < 3: return tracks
+    
+    log_status(70, "Smoothing playlist gradient...")
+    
+    # Start with the first track in the list (Anchor)
+    pool = list(tracks)
+    ordered = [pool.pop(0)] 
+    
+    while pool:
+        current = ordered[-1]
+        best_next = None
+        best_score = -1
+        
+        try:
+            # Ask Plex for neighbors of current track
+            sims = get_sonic_similar_tracks(current, limit=50)
+            sim_keys = [t.ratingKey for t in sims]
+            
+            # Find the best match from our pool
+            for candidate in pool:
+                if candidate.ratingKey in sim_keys:
+                    # Score = Inverse index (0 is best, score 100)
+                    idx = sim_keys.index(candidate.ratingKey)
+                    score = 100 - idx
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_next = candidate
+                        break # List is sorted, so first match is best match
+        except: pass
+        
+        if best_next:
+            ordered.append(best_next)
+            pool.remove(best_next)
+        else:
+            # Dead end: Pick the next track in the original list (preserve original sort order as fallback)
+            fallback = pool.pop(0)
+            ordered.append(fallback)
+            
+    return ordered
+
 # ---------------------------------------------------------------------------
 # DATA HELPERS
 # ---------------------------------------------------------------------------
@@ -1306,6 +1497,11 @@ def main() -> int:
             recent_days=recent_days, recent_weight=recent_weight # <--- ADDED
         ))
 
+    # Mode: Sonic Journey
+    elif seed_mode == "sonic_journey" and seed_tracks:
+        log_detail(f" embarking on a Sonic Journey between {len(seed_tracks)} waypoints...")
+        candidates.extend(expand_sonic_journey(seed_tracks, plex, target_count=max_tracks))
+
     # Standard Sonic Modes
     elif "sonic" in seed_mode and seed_tracks:
         sonic_limit = int(pl_cfg.get("sonic_similar_limit", 20))
@@ -1365,19 +1561,23 @@ def main() -> int:
 
     valid_candidates = []
     for t in candidates:
+        # Use **filter_criteria to pass all the filter settings automatically
         if track_passes_static_filters(
             t, plex, seen_ids, excluded_keys,
-            min_track, min_album, min_artist, allow_unrated,
-            int(pl_cfg.get("min_play_count", -1) or -1) if pl_cfg.get("min_play_count")!=-1 else None,
-            int(pl_cfg.get("max_play_count", -1) or -1) if pl_cfg.get("max_play_count")!=-1 else None,
-            int(pl_cfg.get("min_year", 0)), int(pl_cfg.get("max_year", 0)),
-            int(pl_cfg.get("min_duration_sec", 0)), int(pl_cfg.get("max_duration_sec", 0)),
-            filt_cols, exc_cols, exc_genres, rejects
+            **filter_criteria, 
+            reject_reasons=rejects
         ):
             valid_candidates.append(t)
 
-    random.shuffle(valid_candidates)
-    
+    if bool(pl_cfg.get("sonic_smoothing", False)):
+        # If smoothing is on, we DO NOT shuffle randomly. We sort by gradient.
+        # However, if we have way too many candidates, we might want to trim first.
+        # Let's smooth the valid_candidates list directly.
+        valid_candidates = smooth_playlist_gradient(valid_candidates, plex)
+    else:
+        # Standard behavior: Shuffle to avoid clumping
+        random.shuffle(valid_candidates)
+
     final_tracks = []
     for t in valid_candidates:
         if len(final_tracks) >= max_tracks:

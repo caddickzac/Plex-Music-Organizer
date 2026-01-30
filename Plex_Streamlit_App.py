@@ -925,6 +925,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
                     "pc_sonic_limit",
                     "pc_hist_ratio",
                     "pc_explore_exploit",
+                    "pc_sonic_smoothing",
                     "pc_use_periods",
 
                     "pc_min_track",
@@ -1064,6 +1065,12 @@ def ui_playlist_creator_tab(cfg: AppConfig):
                 "0 = pure exploration (low popularity bias), "
                 "1 = pure exploitation (strong bias toward most popular tracks)."
             ),
+        )
+        sonic_smoothing = st.checkbox(
+            "Sonic Smoothing (Gradient Sort)",
+            value=st.session_state.get("pc_sonic_smoothing", False),
+            key="pc_sonic_smoothing",
+            help="If checked, the final playlist will be reordered so each track flows sonically into the next."
         )
         seed_fallback_mode = st.radio(
             "When explicit seeds are too few, fill from:",
@@ -1308,7 +1315,8 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "Sonic Album Mix",
         "Sonic Tracks Mix",
         "Sonic Combo (Albums + Artists)",
-        "Sonic History (Intersection)",        
+        "Sonic History (Intersection)", 
+        "Sonic Journey (Linear Path)",
         "Strict Collection"
     ]
 
@@ -1325,8 +1333,9 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "- History + Seeds: Your recent history PLUS any specific seeds you add (Union).\n"
             "- Sonic Album/Artist: Seed + sonically similar albums/artists (Broad).\n"
             "- Sonic Combo: Expands via both similar albums and artists (Dense).\n"
-            "- Sonic History: Only tracks from your history that sound like your seeds (Intersection).\n"
             "- Sonic Tracks: Strict, dynamic expansion directly from seed tracks (track-to-track similarity).\n"
+            "- Sonic History: Only tracks from your history that sound like your seeds (Intersection).\n"
+            "- Sonic Journey: Connects your seeds with a sonically similar path of tracks (e.g., Six Degrees of Separation).\n"
             "- Strict Collection: Only tracks from the specified collections (Curator Mode)."
         ),
     )
@@ -1341,6 +1350,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "Sonic Tracks Mix": "track_sonic",  #
         "Sonic Combo (Albums + Artists)": "sonic_combo",
         "Sonic History (Intersection)": "sonic_history",
+        "Sonic Journey (Linear Path)": "sonic_journey",
         "Strict Collection": "strict_collection"
     }
     seed_mode = seed_mode_map[st.session_state["pc_seed_mode_label"]]
@@ -1432,6 +1442,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "sonic_similar_limit": int(sonic_similar_limit),
             "historical_ratio": float(historical_ratio),
             "exploit_weight": float(exploit_weight),
+            "sonic_smoothing": 1 if sonic_smoothing else 0,
 
             # rating filters
             "min_rating": {
