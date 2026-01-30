@@ -18,6 +18,8 @@ from plexapi.server import PlexServer  # type: ignore
 APP_TITLE = "Plex Music Library — Organizer"
 APP_DIR = os.getcwd()
 SCRIPTS_DIR = os.path.join(APP_DIR, "Scripts")
+# Define the Exports directory
+EXPORTS_DIR = os.path.join(APP_DIR, "Exports")
 CONFIG_TXT = os.path.join(APP_DIR, "config.txt")
 PLAYLIST_CREATOR_SCRIPT = os.path.join(SCRIPTS_DIR, "playlist_creator.py")
 
@@ -31,6 +33,7 @@ PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
 class AppConfig:
     plex_baseurl: str = ""
     plex_token: str = ""
+    plex_library: str = "Music"
 
 # ---------------------------
 # Utilities: config.txt loader
@@ -43,32 +46,48 @@ def _strip_wrapping_quotes(s: str) -> str:
 
 def load_config_txt() -> AppConfig:
     """
-    Reads ./config.txt for:
-      Plex URL: <value>
-      Plex Token: <value>
-    Values may be quoted with ' or ".
-    Missing file or keys -> empty strings.
+    Reads ./config.txt for settings.
+    Supports: "Plex URL: ..." OR "PLEX_URL = ..."
     """
     baseurl = ""
     token = ""
+    library = "Music"  # Default if missing
+    
+    if not os.path.isfile(CONFIG_TXT):
+        return AppConfig(plex_baseurl=baseurl, plex_token=token, plex_library=library)
+
     try:
         with open(CONFIG_TXT, "r", encoding="utf-8") as f:
             for raw in f:
                 line = raw.strip()
-                if not line or ":" not in line:
+                # Skip comments or empty lines
+                if not line or line.startswith("#"):
                     continue
-                key, val = line.split(":", 1)
-                key = key.strip().lower()
+                
+                # Determine separator (: or =)
+                sep = ":" if ":" in line else "="
+                if sep not in line:
+                    continue
+                
+                key, val = line.split(sep, 1)
+                
+                # Normalize key: lowercase and replace underscores with spaces
+                # This makes "PLEX_URL" and "plex url" treated identical
+                key = key.strip().lower().replace("_", " ") 
                 val = _strip_wrapping_quotes(val)
+                
                 if key == "plex url":
                     baseurl = val
                 elif key == "plex token":
                     token = val
-    except FileNotFoundError:
+                elif key == "plex library" or key == "plex library name":
+                    library = val
+                    
+    except Exception as e:
+        print(f"Error reading config.txt: {e}")
         pass
-    except Exception:
-        pass
-    return AppConfig(plex_baseurl=baseurl, plex_token=token)
+        
+    return AppConfig(plex_baseurl=baseurl, plex_token=token, plex_library=library)
 
 # ---------------------------
 # Dynamic script discovery (folder-based)
@@ -178,7 +197,7 @@ def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
     if not os.path.isfile(script_path):
         raise FileNotFoundError(f"Export script not found: {script_path}")
 
-    out_path = os.path.join(APP_DIR, "Track_Level_Info.csv")
+    out_path = os.path.join(EXPORTS_DIR, "Track_Level_Info.csv")
 
     env = os.environ.copy()
     env.update({
@@ -450,29 +469,73 @@ def compare_exports_add_match_cols(
 # Sidebar config
 # ---------------------------
 def ui_sidebar_config() -> AppConfig:
-    file_cfg = load_config_txt()
-    if "baseurl" not in st.session_state and file_cfg.plex_baseurl:
-        st.session_state["baseurl"] = file_cfg.plex_baseurl
-    if "token" not in st.session_state and file_cfg.plex_token:
-        st.session_state["token"] = file_cfg.plex_token
-
     st.sidebar.header("Configuration")
+
+    # 1. Try Loading from Config File (Laptop method)
+    file_cfg = load_config_txt()
+    
+    # 2. Try Loading from Environment (Unraid/Docker method)
+    env_url = os.getenv("PLEX_URL", "")
+    env_token = os.getenv("PLEX_TOKEN", "")
+    env_lib = os.getenv("PLEX_LIBRARY_NAME", "Music") # Default to "Music"
+
+    # 3. Determine Defaults (Environment wins if present, otherwise Config file)
+    default_url = env_url if env_url else file_cfg.plex_baseurl
+    default_token = env_token if env_token else file_cfg.plex_token
+    if env_lib and env_lib != "Music":
+        default_lib = env_lib
+    elif file_cfg.plex_library:
+        default_lib = file_cfg.plex_library
+    else:
+        default_lib = "Music"
+
+    # 4. Initialize Session State if needed
+    if "baseurl" not in st.session_state or not st.session_state["baseurl"]:
+        st.session_state["baseurl"] = default_url
+        
+    if "token" not in st.session_state or not st.session_state["token"]:
+        st.session_state["token"] = default_token
+        
+    if "library_name" not in st.session_state or not st.session_state["library_name"]:
+        st.session_state["library_name"] = default_lib
+
+    # 5. Render the inputs
     baseurl = st.sidebar.text_input(
         "Plex URL",
+        value=st.session_state["baseurl"],
         placeholder="http://127.0.0.1:32400",
-        key="baseurl"
+        key="baseurl_input"
     )
     token = st.sidebar.text_input(
         "Plex Token",
+        value=st.session_state["token"],
         type="password",
         placeholder="••••••••",
-        key="token"
+        key="token_input"
+    )
+    lib_name = st.sidebar.text_input(
+        "Music Library Name",
+        value=st.session_state["library_name"],
+        placeholder="Music",
+        key="library_input",
+        help="The exact name of your music library in Plex (case-sensitive)."
     )
 
-    if (file_cfg.plex_baseurl or file_cfg.plex_token):
-        st.sidebar.caption("Defaults loaded from config.txt")
+    # Update session state on change
+    st.session_state["baseurl"] = baseurl
+    st.session_state["token"] = token
+    st.session_state["library_name"] = lib_name
 
-    return AppConfig(plex_baseurl=baseurl.strip(), plex_token=token.strip())
+    if env_url or env_token:
+        st.sidebar.caption("✅ Loaded from Container Environment")
+    elif file_cfg.plex_baseurl or file_cfg.plex_token:
+        st.sidebar.caption("✅ Loaded from config.txt")
+
+    return AppConfig(
+        plex_baseurl=baseurl.strip(), 
+        plex_token=token.strip(), 
+        plex_library=lib_name.strip()
+    )
 
 # ---------------------------
 # Export tab
@@ -848,6 +911,25 @@ def apply_preset_to_session(preset: dict) -> None:
 # Playlist Creator tab (with presets)
 # ---------------------------
 def ui_playlist_creator_tab(cfg: AppConfig):
+
+    def check_sonic_status(cfg: AppConfig):
+        # Quick check to see if the server can even do sonic analysis
+        try:
+            plex = PlexServer(cfg.plex_baseurl, cfg.plex_token)
+            music = plex.library.section(st.session_state.get("pc_lib", "Music"))
+            
+            # Check if the feature is enabled on the library
+            if not music.enableSonicAnalysis:
+                 st.error("🚨 Sonic Analysis is DISABLED on your Music library. This tool will not work until you enable it in Plex settings.")
+                 return False
+            return True
+        except:
+            # Fail gracefully if library doesn't exist yet
+            return True 
+
+    # Then call it at the start of the tab
+    check_sonic_status(cfg)
+
     # 1. HANDLE LOADING FIRST (Before any widgets are instantiated)
     if "pc_preset_select" in st.session_state:
         # Check if the load button was pressed
@@ -876,15 +958,52 @@ def ui_playlist_creator_tab(cfg: AppConfig):
     existing_presets = list_presets()
     preset_options = ["<none>"] + existing_presets
 
-    # CALLBACK FUNCTION: This runs BEFORE the widgets are drawn
+    # --- MASTER KEY LIST (Used for both Reset and Save) ---
+    ALL_PRESET_KEYS = [
+        "pc_lib", "pc_custom_title", "pc_preset_name",
+        "pc_exclude_days", "pc_lookback_days", "pc_max_tracks",
+        "pc_sonic_limit", "pc_deep_dive_target",  # <--- Added this missing key!
+        "pc_hist_ratio", "pc_explore_exploit", "pc_sonic_smoothing", "pc_use_periods",
+        
+        "pc_min_track", "pc_min_album", "pc_min_artist", "pc_allow_unrated",
+        "pc_min_play_count", "pc_max_play_count",
+        
+        "pc_min_year", "pc_max_year", "pc_min_duration", "pc_max_duration",
+        
+        "pc_recent_days", "pc_recent_weight",
+        "pc_max_artist", "pc_max_album",
+        
+        "pc_hist_min_rating", "pc_hist_max_play_count",
+        
+        "pc_seed_mode_label", "pc_seed_fallback_mode",
+        
+        "pc_seed_tracks", "pc_seed_artists", "pc_seed_playlists",
+        "pc_seed_collections", "pc_seed_genres",
+        
+        "pc_genre_strict", "pc_allow_off_genre", "pc_exclude_genres",
+        "pc_include_collections", "pc_exclude_collections"
+    ]
+
+    # --- CALLBACKS ---
+
     def handle_load_preset():
         sel = st.session_state.get("pc_preset_select")
         if sel and sel != "<none>":
             preset = load_preset_dict(sel)
             if preset:
                 apply_preset_to_session(preset)
-                # Note: st.success and st.experimental_rerun aren't 
-                # strictly needed inside a callback, but you can keep them.
+
+    def handle_reset_inputs():
+        """Clears all playlist creator session keys, reverting widgets to defaults."""
+        for k in ALL_PRESET_KEYS:
+            if k in st.session_state:
+                del st.session_state[k]
+        
+        # Reset the preset dropdown to "<none>"
+        if "pc_preset_select" in st.session_state:
+            st.session_state["pc_preset_select"] = "<none>"
+
+    # --- LAYOUT ---
 
     col_p1, col_p2 = st.columns([2, 2])
     with col_p1:
@@ -895,7 +1014,6 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             key="pc_preset_select",
         )
     with col_p2:
-        # This widget is now safe because handle_load_preset runs BEFORE this line
         preset_name = st.text_input(
             "Preset name (for saving)",
             value=st.session_state.get("pc_preset_name", ""),
@@ -904,71 +1022,24 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         )
 
     col_pb1, col_pb2 = st.columns(2)
+    
     with col_pb1:
-        # Use on_click to trigger the callback
-        st.button("Load preset", key="pc_btn_load", on_click=handle_load_preset)
+        # Side-by-side Load and Reset buttons
+        c_load, c_reset = st.columns([1, 1])
+        with c_load:
+            st.button("Load preset", key="pc_btn_load", on_click=handle_load_preset, use_container_width=True)
+        with c_reset:
+            st.button("Reset Inputs", key="pc_btn_reset", on_click=handle_reset_inputs, use_container_width=True)
 
     with col_pb2:
-        if st.button("Save current settings as preset", key="pc_btn_save"):
+        if st.button("Save current settings as preset", key="pc_btn_save", use_container_width=True):
             name = (preset_name or "").strip()
             if not name:
                 st.error("Please enter a preset name before saving.")
             else:
-                # What we store as a preset: all relevant pc_* keys
-                preset_keys = [
-                    "pc_lib",
-                    "pc_custom_title",
-                    "pc_preset_name",
-                    "pc_exclude_days",
-                    "pc_lookback_days",
-                    "pc_max_tracks",
-                    "pc_sonic_limit",
-                    "pc_hist_ratio",
-                    "pc_explore_exploit",
-                    "pc_sonic_smoothing",
-                    "pc_use_periods",
-
-                    "pc_min_track",
-                    "pc_min_album",
-                    "pc_min_artist",
-                    "pc_allow_unrated",
-
-                    "pc_min_play_count",
-                    "pc_max_play_count",
-
-                    "pc_min_year",
-                    "pc_max_year",
-                    "pc_min_duration",
-                    "pc_max_duration",
-
-                    "pc_recent_days",
-                    "pc_recent_weight",
-
-                    "pc_max_artist",
-                    "pc_max_album",
-
-                    "pc_hist_min_rating",
-                    "pc_hist_max_play_count",
-
-                    # 👇 make sure this is here
-                    "pc_seed_mode_label",
-                    "pc_seed_fallback_mode",
-
-                    "pc_seed_tracks",
-                    "pc_seed_artists",
-                    "pc_seed_playlists",
-                    "pc_seed_collections",
-                    "pc_seed_genres",
-
-                    "pc_genre_strict",
-                    "pc_allow_off_genre",
-                    "pc_exclude_genres",
-                    "pc_include_collections",
-                    "pc_exclude_collections",
-                ]
-                data = {k: st.session_state.get(k) for k in preset_keys}
+                # Use the MASTER LIST to ensure we save everything
+                data = {k: st.session_state.get(k) for k in ALL_PRESET_KEYS}
                 save_preset_dict(name, data)
-
                 st.success(f"Saved preset: {name}")
 
     st.divider()
@@ -978,7 +1049,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
     # ---------------------------
 
     # Music library name
-    music_lib = st.text_input("Music library name", value="Music", key="pc_lib")
+    music_lib = st.text_input("Music library name", value=cfg.plex_library, key="pc_lib")
 
     # Playlist naming (custom title)
     st.markdown("### Playlist naming")
@@ -1687,6 +1758,36 @@ def ui_compare_tab():
 # Main
 # ---------------------------
 def main():
+    # 1. Check for the password variable
+    # If this is None or empty, we assume we are in "Trusted/Local" mode
+    app_password = os.getenv("APP_PASSWORD")
+
+    # 2. The Gatekeeper Logic
+    # We only run this block if a password was actually found in the environment
+    if app_password:
+        if "authenticated" not in st.session_state:
+            st.session_state["authenticated"] = False
+
+        if not st.session_state["authenticated"]:
+            st.sidebar.title("Login")
+            # Use a key to keep the input stable
+            pw = st.sidebar.text_input("Enter App Password", type="password", key="password_input")
+            
+            # Check password on button click
+            if st.sidebar.button("Login"):
+                if pw == app_password:
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    st.sidebar.error("Incorrect Password")
+            
+            st.warning("Protected Mode: Please login to access the music hub.")
+            st.stop() # Stops the rest of the app from loading until logged in
+
+    os.makedirs(EXPORTS_DIR, exist_ok=True) # make sure exports dir exists
+
+    # 3. Main Application Load
+    # If we get here, either no password was set, or the user successfully logged in.
     st.title(APP_TITLE)
     st.caption("Export music metadata, update metadata, and build intelligent playlists.")
     cfg = ui_sidebar_config()

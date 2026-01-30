@@ -240,7 +240,7 @@ def _artist_bucket(artist_name: str):
 total_written = 0
 
 print(f"Writing track export to: {OUTPUT_CSV}", flush=True)
-with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
+with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
     writer = csv.writer(f)
     writer.writerow(header)
 
@@ -451,7 +451,7 @@ album_header = [
 
 keys_sorted = sorted(album_acc.keys(), key=lambda k: (k[0].lower(), k[1].lower()))
 
-with open(ALBUM_INFO_CSV, "w", newline="", encoding="utf-8") as f:
+with open(ALBUM_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
     w = csv.writer(f)
     w.writerow(album_header)
 
@@ -506,7 +506,7 @@ artist_header = [
 
 artist_keys_sorted = sorted(artist_acc.keys(), key=lambda x: x.lower())
 
-with open(ARTIST_INFO_CSV, "w", newline="", encoding="utf-8") as f:
+with open(ARTIST_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
     w = csv.writer(f)
     w.writerow(artist_header)
 

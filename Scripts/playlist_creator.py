@@ -108,8 +108,8 @@ def create_playlist_thumbnail(title, output_path="thumb.png"):
     for fpath in linux_fonts:
         if os.path.exists(fpath):
             try:
-                title_font = ImageFont.truetype(fpath, 80)
-                date_font = ImageFont.truetype(fpath, 50)
+                title_font = ImageFont.truetype(fpath, 95)
+                date_font = ImageFont.truetype(fpath, 80)
                 break
             except:
                 continue
@@ -117,8 +117,8 @@ def create_playlist_thumbnail(title, output_path="thumb.png"):
     # 2. Try Windows/Standard Paths
     if title_font is None:
         try:
-            title_font = ImageFont.truetype("arial.ttf", 80)
-            date_font = ImageFont.truetype("arial.ttf", 50)
+            title_font = ImageFont.truetype("arial.ttf", 95)
+            date_font = ImageFont.truetype("arial.ttf", 80)
         except OSError:
             log_warning("Could not load custom fonts. Using default.")
             title_font = ImageFont.load_default()
@@ -358,6 +358,36 @@ def get_track_genres_with_fallback(track: Track) -> Set[str]:
 
     return set()
 
+def clean_title(title: str) -> str:
+    """
+    Normalizes a track title to catch fuzzy duplicates.
+    Removes: case, punctuation, and common suffixes like 'Remaster', 'Live', 'Feat'.
+    """
+    if not title: return ""
+    
+    # 1. Lowercase and strip
+    t = title.lower().strip()
+    
+    # 2. Remove common junk using regex
+    # Removes (Live), [Remastered], - Remaster, etc.
+    patterns = [
+        r"\(.*live.*\)", r"\[.*live.*\]", r"\-.*live.*",
+        r"\(.*remaster.*\)", r"\[.*remaster.*\]", r"\-.*remaster.*",
+        r"\(.*deluxe.*\)", r"\[.*deluxe.*\]",
+        r"\(.*feat.*\)", r"\[.*feat.*\]", r"feat\..*",
+        r"\s-\s.*$" # Remove anything after a " - " (often used for subtitles)
+    ]
+    
+    import re
+    for pat in patterns:
+        t = re.sub(pat, "", t)
+        
+    # 3. Remove punctuation
+    t = re.sub(r"[^\w\s]", "", t)
+    
+    # 4. Collapse whitespace
+    return " ".join(t.split())
+
 # ---------------------------------------------------------------------------
 # FILTER LOGIC
 # ---------------------------------------------------------------------------
@@ -586,10 +616,14 @@ def expand_via_sonic_albums(seed_tracks, plex, sonic_limit, exclude_keys, filter
                 seen.add(rk)
                 albums.append(a)
 
-    # 2. Find Sonic Similar Albums
+    # 2. Find Sonic Similar Albums (BOOSTED)
     expanded_albums = list(albums)
     for album in albums:
-        for s in get_sonic_similar_albums(album, limit=sonic_limit):
+        # BOOST: Fetch 2x the requested limit (min 40) to ensure diversity.
+        # This prevents running out of tracks when Artist Caps are strict.
+        boosted_limit = max(40, sonic_limit * 2)
+        
+        for s in get_sonic_similar_albums(album, limit=boosted_limit):
             rk = getattr(s, "ratingKey", None)
             if rk and rk not in seen:
                 seen.add(rk)
@@ -630,9 +664,13 @@ def expand_via_sonic_artists(seed_artists, plex, sonic_limit, exclude_keys, filt
     artists = list(seed_artists)
     seen = {getattr(a, "ratingKey") for a in seed_artists if getattr(a, "ratingKey", None)}
 
-    # 1. Find Sonic Similar Artists
+    # 1. Find Sonic Similar Artists (BOOSTED)
     for a in seed_artists:
-        for s in get_sonic_similar_artists(a, limit=sonic_limit):
+        # BOOST: Fetch 2x the requested limit (min 40) to ensure we have 
+        # enough unique artists to survive strict "Max Tracks Per Artist" caps.
+        boosted_limit = max(40, sonic_limit * 2)
+        
+        for s in get_sonic_similar_artists(a, limit=boosted_limit):
             rk = getattr(s, "ratingKey", None)
             if rk and rk not in seen:
                 seen.add(rk)
@@ -646,6 +684,7 @@ def expand_via_sonic_artists(seed_artists, plex, sonic_limit, exclude_keys, filt
     recent_days = int(kwargs.get('recent_days', 0))
     recent_weight = float(kwargs.get('recent_weight', 1.0))
     
+    # 3. Harvest Tracks
     for artist in artists:
         try:
             valid = 0
@@ -661,6 +700,8 @@ def expand_via_sonic_artists(seed_artists, plex, sonic_limit, exclude_keys, filt
                     results.append(track)
                     valid += 1
                 
+                # We cap harvest at 25 per artist to save time. 
+                # Since your UI cap is likely lower (e.g. 3-4), this is plenty.
                 if valid >= 25: break
         except: continue
         
@@ -827,7 +868,7 @@ def find_sonic_path(start_track: Track, end_track: Track, plex: PlexServer, max_
     visited = {start_track.ratingKey}
     
     target_key = end_track.ratingKey
-    max_nodes = 2000 # Safety brake to prevent infinite API calls
+    max_nodes = 1300 # Safety brake to prevent infinite API calls
     nodes_visited = 0
 
     log_detail(f"Pathfinding: {start_track.title} -> {end_track.title} (Max Depth {max_depth}, Width {width})")
@@ -952,45 +993,54 @@ def expand_sonic_journey(seed_tracks, plex, target_count: int = 50, **kwargs) ->
 
 def smooth_playlist_gradient(tracks: List[Track], plex: PlexServer) -> List[Track]:
     """
-    Reorders a list of tracks to create a sonic gradient.
-    Greedy Algorithm: Always pick the next track that is most sonically similar to the current one.
+    Reorders tracks to create a sonic gradient, with penalties for repetitive artists.
+    Starts with a RANDOM track to ensure fresh journeys on every run.
     """
     if len(tracks) < 3: return tracks
     
-    log_status(70, "Smoothing playlist gradient...")
+    log_status(70, "Smoothing playlist gradient (Anti-Clump Mode)...")
     
-    # Start with the first track in the list (Anchor)
     pool = list(tracks)
-    ordered = [pool.pop(0)] 
+    
+    # --- CHANGE: Pick a RANDOM start track instead of the first one ---
+    import random
+    start_index = random.randint(0, len(pool) - 1)
+    ordered = [pool.pop(start_index)]
+    # ------------------------------------------------------------------
     
     while pool:
         current = ordered[-1]
         best_next = None
-        best_score = -1
+        best_score = -999 # Allow for negative scores
+        
+        curr_artist = getattr(current, "grandparentTitle", "") or getattr(current, "originalTitle", "")
         
         try:
-            # Ask Plex for neighbors of current track
+            # Ask Plex for neighbors
             sims = get_sonic_similar_tracks(current, limit=50)
             sim_keys = [t.ratingKey for t in sims]
             
-            # Find the best match from our pool
             for candidate in pool:
                 if candidate.ratingKey in sim_keys:
-                    # Score = Inverse index (0 is best, score 100)
                     idx = sim_keys.index(candidate.ratingKey)
                     score = 100 - idx
                     
+                    # Artist Penalty
+                    cand_artist = getattr(candidate, "grandparentTitle", "") or getattr(candidate, "originalTitle", "")
+                    if curr_artist and cand_artist and curr_artist == cand_artist:
+                        score -= 25 
+
                     if score > best_score:
                         best_score = score
                         best_next = candidate
-                        break # List is sorted, so first match is best match
+                        
         except: pass
         
         if best_next:
             ordered.append(best_next)
             pool.remove(best_next)
         else:
-            # Dead end: Pick the next track in the original list (preserve original sort order as fallback)
+            # Dead end: Pick a random next track to jump out of the rut
             fallback = pool.pop(0)
             ordered.append(fallback)
             
@@ -1196,6 +1246,25 @@ def convert_preset_to_payload(flat_cfg: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--preset", type=str, help="Name of a preset JSON file to load")
+    args, unknown = parser.parse_known_args()
+
+    # MODE 1: CLI Preset (User Scripts)
+    if args.preset:
+        # Load the preset JSON from the presets folder
+        # Overwrite defaults with these values
+        # Run the generation
+        pass
+
+    # MODE 2: Streamlit Payload
+    else:
+        # Read from stdin as you do now
+        input_data = sys.stdin.read()
+        if input_data:
+             payload = json.loads(input_data)
+             # Run the generation
+
     start_time = time.time()
     
     parser = argparse.ArgumentParser()
@@ -1538,8 +1607,8 @@ def main() -> int:
     # ------------------------------------------------------------------
     log_status(50, f"Filtering {len(candidates)} candidates...")
     
-    filtered = []
     seen_ids = set()
+    seen_fingerprints = set()
     rejects = Counter()
     
     exc_cols = {str(x).strip() for x in pl_cfg.get("exclude_collections", [])}
@@ -1556,31 +1625,55 @@ def main() -> int:
 
     max_tracks_per_artist = int(pl_cfg.get("max_tracks_per_artist", 0) or 0)
     max_tracks_per_album = int(pl_cfg.get("max_tracks_per_album", 0) or 0)
-    artist_counts = defaultdict(int)
-    album_counts = defaultdict(int)
-
+    
     valid_candidates = []
+    
+    # --- PHASE 1: VALIDATION (All Modes) ---
     for t in candidates:
-        # Use **filter_criteria to pass all the filter settings automatically
-        if track_passes_static_filters(
+        # 1. Check Technical Filters (Rating, Year, etc.)
+        if not track_passes_static_filters(
             t, plex, seen_ids, excluded_keys,
             **filter_criteria, 
             reject_reasons=rejects
         ):
-            valid_candidates.append(t)
+            continue
 
-    if bool(pl_cfg.get("sonic_smoothing", False)):
-        # If smoothing is on, we DO NOT shuffle randomly. We sort by gradient.
-        # However, if we have way too many candidates, we might want to trim first.
-        # Let's smooth the valid_candidates list directly.
-        valid_candidates = smooth_playlist_gradient(valid_candidates, plex)
-    else:
-        # Standard behavior: Shuffle to avoid clumping
-        random.shuffle(valid_candidates)
+        # 2. Check Fuzzy Duplicate (Title + Artist)
+        try:
+            artist_clean = clean_title(t.grandparentTitle or t.originalTitle or "unknown")
+            track_clean = clean_title(t.title)
+            fingerprint = f"{artist_clean}_{track_clean}"
+            
+            if fingerprint in seen_fingerprints:
+                rejects["fuzzy_duplicate"] += 1
+                continue
+                
+            if t.ratingKey: seen_ids.add(str(t.ratingKey))
+            seen_fingerprints.add(fingerprint)
+            
+        except: pass
 
-    final_tracks = []
+        valid_candidates.append(t)
+
+    # --- PHASE 2: RANKING (Skip for Journey) ---
+    # Sonic Journey's order IS the logic. Do not scramble it with Smart Sort.
+    if seed_mode != "sonic_journey":
+        valid_candidates = smart_sort_candidates(
+            valid_candidates, 
+            exploit_weight, 
+            use_popularity=True, 
+            recent_days=recent_days, 
+            recent_weight=recent_weight
+        )
+
+    # --- PHASE 3: SELECTION (Caps) ---
+    final_selection = []
+    
+    artist_counts = defaultdict(int)
+    album_counts = defaultdict(int)
+    
     for t in valid_candidates:
-        if len(final_tracks) >= max_tracks:
+        if len(final_selection) >= max_tracks:
             break
             
         try:
@@ -1588,11 +1681,13 @@ def main() -> int:
             album_key = t.parentRatingKey or "Unknown"
         except: continue
 
+        # Check Caps
         if max_tracks_per_artist > 0 and artist_counts[artist_name] >= max_tracks_per_artist:
             continue
         if max_tracks_per_album > 0 and album_counts[album_key] >= max_tracks_per_album:
             continue
 
+        # Check Genre Strictness
         if seed_genre_set:
             candidate_genres = get_track_genres_with_fallback(t)
             on_genre = bool(candidate_genres.intersection(seed_genre_set))
@@ -1603,9 +1698,18 @@ def main() -> int:
                 else:
                     off_genre_count += 1
 
-        final_tracks.append(t)
+        # Add to Selection
+        final_selection.append(t)
         artist_counts[artist_name] += 1
         album_counts[album_key] += 1
+
+    # --- PHASE 4: SMOOTHING (Skip for Journey) ---
+    # Journey is already smoothed (A -> B). Random anchor smoothing would break the chain.
+    if seed_mode != "sonic_journey" and bool(pl_cfg.get("sonic_smoothing", False)):
+        log_detail(f"Smoothing final selection of {len(final_selection)} tracks...")
+        final_tracks = smooth_playlist_gradient(final_selection, plex)
+    else:
+        final_tracks = final_selection
 
     log_detail(f"Final Playlist Size: {len(final_tracks)}")
     if not final_tracks:
@@ -1636,7 +1740,7 @@ def main() -> int:
             playlist = plex.createPlaylist(title, items=final_tracks)
             log(f"✨ Created new playlist: {title}")
 
-        playlist.edit(summary=desc)
+        playlist.editSummary(desc)
 
         thumb_file = f"thumb_{playlist.ratingKey}.png"
         create_playlist_thumbnail(title, thumb_file)
