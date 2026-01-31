@@ -1630,13 +1630,9 @@ def main() -> int:
     if seed_mode != "sonic_journey":
         recency_bias = float(pl_cfg.get("recency_bias", 0.0))
         
-        # Default to Popularity as base
+        # Default to Popularity as base for ALL sortable modes (History, Genre, Strict, etc.)
         use_pop = True
         
-        # Optional: Force "Order" base for Strict Collection if you want to respect the collection's sort
-        if seed_mode == "strict_collection":
-             use_pop = False
-
         valid_candidates = smart_sort_candidates(
             valid_candidates, 
             exploit_weight, 
