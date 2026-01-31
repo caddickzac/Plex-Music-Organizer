@@ -901,38 +901,28 @@ def apply_preset_to_session(preset: dict) -> None:
         "pc_hist_ratio",
         "pc_explore_exploit",
         "pc_use_periods",
-
         "pc_min_track",
         "pc_min_album",
         "pc_min_artist",
         "pc_allow_unrated",
-
         "pc_min_play_count",
         "pc_max_play_count",
-
         "pc_min_year",
         "pc_max_year",
         "pc_min_duration",
         "pc_max_duration",
-
-        "pc_recent_days",
-        "pc_recent_weight",
-
+        "pc_recency_bias",
         "pc_max_artist",
         "pc_max_album",
-
         "pc_hist_min_rating",
         "pc_hist_max_play_count",
-
         "pc_seed_mode_label",
         "pc_seed_fallback_mode",
-
         "pc_seed_tracks",
         "pc_seed_artists",
         "pc_seed_playlists",
         "pc_seed_collections",
         "pc_seed_genres",
-
         "pc_genre_strict",
         "pc_allow_off_genre",
         "pc_exclude_genres",
@@ -998,24 +988,17 @@ def ui_playlist_creator_tab(cfg: AppConfig):
     ALL_PRESET_KEYS = [
         "pc_lib", "pc_custom_title", "pc_preset_name",
         "pc_exclude_days", "pc_lookback_days", "pc_max_tracks",
-        "pc_sonic_limit", "pc_deep_dive_target",  # <--- Added this missing key!
+        "pc_sonic_limit", "pc_deep_dive_target", 
         "pc_hist_ratio", "pc_explore_exploit", "pc_sonic_smoothing", "pc_use_periods",
-        
         "pc_min_track", "pc_min_album", "pc_min_artist", "pc_allow_unrated",
         "pc_min_play_count", "pc_max_play_count",
-        
         "pc_min_year", "pc_max_year", "pc_min_duration", "pc_max_duration",
-        
-        "pc_recent_days", "pc_recent_weight",
         "pc_max_artist", "pc_max_album",
-        
+        "pc_recency_bias",
         "pc_hist_min_rating", "pc_hist_max_play_count",
-        
         "pc_seed_mode_label", "pc_seed_fallback_mode",
-        
         "pc_seed_tracks", "pc_seed_artists", "pc_seed_playlists",
         "pc_seed_collections", "pc_seed_genres",
-        
         "pc_genre_strict", "pc_allow_off_genre", "pc_exclude_genres",
         "pc_include_collections", "pc_exclude_collections"
     ]
@@ -1313,29 +1296,32 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             step=5,
             key="pc_max_duration",
         )
-
-    st.markdown("### Recency bias (Recently added)")
-
-    rba, rbb = st.columns(2)
-    with rba:
-        recently_added_days = st.number_input(
-            "Recently added window (days, 0 = ignore)",
-            min_value=0,
-            max_value=365,
-            value=st.session_state.get("pc_recent_days", 0),
-            step=1,
-            key="pc_recent_days",
-        )
-    with rbb:
-        recently_added_weight = st.slider(
-            "Recently added weight",
+    
+    # --- GLOBAL DATE BIAS (Constrained to left half) ---
+    st.markdown("### Date Added Bias")
+    
+    # Create two columns to constrain width, but only use the left one
+    bias_col1, bias_col2 = st.columns(2)
+    
+    with bias_col1:
+        recency_bias = st.slider(
+            "Track Recency Bias (0=Neutral, 1=Newest)",
             min_value=0.0,
-            max_value=2.0,
-            value=st.session_state.get("pc_recent_weight", 1.0),
-            step=0.05,
-            key="pc_recent_weight",
-            help=">1 favors newly added tracks more strongly; <1 downweights them.",
+            max_value=1.0,
+            value=st.session_state.get("pc_recency_bias", 0.0),
+            step=0.1,
+            key="pc_recency_bias",
+            help=(
+                "Prioritizes tracks based on how recently they were added to your library.\n"
+                "0.0 = Ignore date.\n"
+                "1.0 = Prefer the newest tracks available in the current selection."
+            )
         )
+        
+        # Visual labels directly underneath the slider
+        lbl_c1, lbl_c2 = st.columns(2)
+        lbl_c1.caption("⬅️ Popularity / Similarity")
+        lbl_c2.markdown("<p style='text-align: right; color: gray; font-size: small;'>Recently Added ➡️</p>", unsafe_allow_html=True)
 
     st.markdown("### Artist / album caps")
     aa1, aa2 = st.columns(2)
@@ -1420,15 +1406,19 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         ),
     )
 
-    off_genre_fraction = st.slider(
-        "Allow off-genre fraction",
-        min_value=0.0,
-        max_value=1.0,
-        value=st.session_state.get("pc_allow_off_genre", 0.2),
-        step=0.05,
-        key="pc_allow_off_genre",
-        help="Maximum fraction of tracks allowed that don't match the album-level genre seeds.",
-    )
+    # Create two columns to constrain the slider width
+    off_col1, off_col2 = st.columns(2)
+
+    with off_col1:
+        off_genre_fraction = st.slider(
+            "Allow off-genre fraction",
+            min_value=0.0,
+            max_value=1.0,
+            value=st.session_state.get("pc_allow_off_genre", 0.2),
+            step=0.05,
+            key="pc_allow_off_genre",
+            help="Maximum fraction of tracks allowed that don't match the genre seeds (checks Track, Album, and Artist tags).",
+        )
 
     st.markdown("### Seed strategy")
 
@@ -1481,26 +1471,6 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         "Strict Collection": "strict_collection"
     }
     seed_mode = seed_mode_map[st.session_state["pc_seed_mode_label"]]
-
-
-    # Slider initialization
-    new_vs_legacy_slider = 0.5
-
-    if seed_mode == "strict_collection":
-        st.divider()
-        st.markdown("### 🎚️ Curator Controls")
-        new_vs_legacy_slider = st.slider(
-            "Playlist Balance: Legacy vs. New",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.5,
-            step=0.05,
-            help="1.0 (New) forces tracks added in the last 180 days to the top. 0.0 (Legacy) favors high play counts and ratings."
-        )
-        col1, col2 = st.columns(2)
-        col1.caption("⬅️ Legacy Staples")
-        col2.markdown("<p style='text-align: right; color: gray; font-size: small;'>Fresh Blood ➡️</p>", unsafe_allow_html=True)
-        st.divider()
 
     st.markdown("### Seed sources")
 
@@ -1584,7 +1554,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "seed_fallback_mode": seed_fallback_mode.lower(),
             "seed_mode": seed_mode,
 
-            "new_vs_legacy_slider": new_vs_legacy_slider,
+            "recency_bias": float(recency_bias),
 
             # play count filters
             "min_play_count": int(min_play_count),
@@ -1595,10 +1565,6 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             "max_year": int(max_year),
             "min_duration_sec": int(min_duration_sec),
             "max_duration_sec": int(max_duration_sec),
-
-            # 🕒 Recency bias (recently added)
-            "recently_added_days": int(recently_added_days),
-            "recently_added_weight": float(recently_added_weight),
 
             # 👥 Artist / album caps
             "max_tracks_per_artist": int(max_tracks_per_artist),

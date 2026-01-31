@@ -233,69 +233,65 @@ def get_sonic_similar_artists(artist: Artist, limit: int) -> List[Artist]:
 # METADATA HELPERS
 # ---------------------------------------------------------------------------
 
-def smart_sort_candidates(candidates: List[Track], exploit_weight: float, use_popularity: bool = True, recent_days: int = 0, recent_weight: float = 1.0) -> List[Track]:
-    """
-    Sorts candidates based on Explore/Exploit AND Recency Bias.
-    exploit_weight: 1.0 = Sort by Best (Popularity/Similarity), 0.0 = Random Shuffle.
-    recent_weight: Multiplier for score (e.g. 1.5 = 50% boost) if added within recent_days.
-    """
+def smart_sort_candidates(candidates: List[Track], exploit_weight: float, recency_bias: float = 0.0, use_popularity: bool = True) -> List[Track]:
     if not candidates: return []
     
-    # 0.0 = Pure Shuffle (Short circuit for speed)
+    # 0.0 = Pure Shuffle (Short circuit)
     if exploit_weight <= 0.01:
         shuffled = list(candidates)
         random.shuffle(shuffled)
         return shuffled
 
-    scored_items = []
-    now = datetime.now()
-    
+    n = len(candidates)
+
+    # --- STEP 1: DEFINE THE BASE METRIC ---
     if use_popularity:
-        # Strategy: Popularity (Deep Dive, Genre)
+        # MODE A: POPULARITY (Ratings + Views)
+        # Used for: Genre, Deep Dive, Artist Mix
         pop_scores = []
         for t in candidates:
-            # Score = Rating (weight 10) + ViewCount (weight 1)
-            raw_pop = float(getattr(t, "viewCount", 0) or 0) + (float(getattr(t, "ratingCount", 0) or 0) * 10)
-            pop_scores.append(raw_pop)
+            raw = float(getattr(t, "viewCount", 0) or 0) + (float(getattr(t, "ratingCount", 0) or 0) * 10)
+            pop_scores.append(raw)
         
         max_pop = max(pop_scores) if pop_scores else 1.0
         if max_pop == 0: max_pop = 1.0
-        
-        for i, t in enumerate(candidates):
-            quality = pop_scores[i] / max_pop
-            
-            # --- RECENCY BOOST ---
-            if recent_days > 0 and getattr(t, 'addedAt', None):
-                try:
-                    delta = (now - t.addedAt).days
-                    if delta <= recent_days:
-                        quality *= recent_weight
-                except: pass
-            
-            # THE FORMULA: Signal (Quality) vs Noise (Random)
-            score = (quality * exploit_weight) + (random.random() * (1.0 - exploit_weight))
-            scored_items.append((score, t))
-            
+        norm_base = [s / max_pop for s in pop_scores]
     else:
-        # Strategy: Rank/Similarity (Sonic Modes)
-        # We assume the incoming list is ALREADY sorted by similarity (Best = Index 0)
-        n = len(candidates)
-        for i, t in enumerate(candidates):
-            # Convert Index to Score (Index 0 = 1.0, Index Last = 0.0)
-            quality = 1.0 - (i / n) if n > 1 else 1.0
+        # MODE B: PRESERVE ORDER (Similarity)
+        # Used for: Sonic Tracks, Sonic Journey, Strict Collection
+        # First item = 1.0 (Best Match), Last item = 0.0 (Worst Match)
+        if n > 1:
+            norm_base = [(n - 1 - i) / (n - 1) for i in range(n)]
+        else:
+            norm_base = [1.0] * n
+
+    # --- STEP 2: CALCULATE DATE SCORE ---
+    timestamps = []
+    for t in candidates:
+        if getattr(t, 'addedAt', None):
+            timestamps.append(t.addedAt.timestamp())
+        else:
+            timestamps.append(0)
             
-            # --- RECENCY BOOST ---
-            if recent_days > 0 and getattr(t, 'addedAt', None):
-                try:
-                    delta = (now - t.addedAt).days
-                    if delta <= recent_days:
-                        quality *= recent_weight
-                except: pass
+    if timestamps:
+        min_ts, max_ts = min(timestamps), max(timestamps)
+        span = max_ts - min_ts if max_ts > min_ts else 1.0
+        norm_date = [(ts - min_ts) / span for ts in timestamps]
+    else:
+        norm_date = [0.0] * n
 
-            score = (quality * exploit_weight) + (random.random() * (1.0 - exploit_weight))
-            scored_items.append((score, t))
+    # --- STEP 3: BLEND THEM ---
+    scored_items = []
+    for i, t in enumerate(candidates):
+        # The Slider (recency_bias) determines the mix.
+        # 0.0 = 100% Base Metric (Pop or Similarity)
+        # 1.0 = 100% Recency
+        quality = (norm_base[i] * (1.0 - recency_bias)) + (norm_date[i] * recency_bias)
+        
+        # Apply Explore/Exploit (Randomness)
+        score = (quality * exploit_weight) + (random.random() * (1.0 - exploit_weight))
+        scored_items.append((score, t))
 
-    # Sort Descending (Highest Score First)
     scored_items.sort(key=lambda x: x[0], reverse=True)
     return [x[1] for x in scored_items]
 
@@ -612,35 +608,6 @@ def pick_track_from_artist(
 # EXPANSION STRATEGIES
 # ---------------------------------------------------------------------------
 
-def expand_strict_collection(music_section, collection_names, slider_val, limit):
-    all_possible_tracks = []
-    for col_name in collection_names:
-        try:
-            collection = music_section.collection(col_name)
-            items = collection.items()
-            for item in items:
-                if item.type == 'artist':
-                    for album in item.albums(): all_possible_tracks.extend(album.tracks())
-                elif item.type == 'album':
-                    all_possible_tracks.extend(item.tracks())
-                elif item.type == 'track':
-                    all_possible_tracks.append(item)
-        except: pass
-
-    scored_list = []
-    now = datetime.now()
-    for track in all_possible_tracks:
-        age_days = (now - track.addedAt).days
-        r_score = max(0, 100 - (age_days * (100 / 180)))
-        plays = getattr(track, 'viewCount', 0) or 0
-        l_score = min(100, (plays * 5) + ((track.userRating or 0) * 10))
-        weight = (r_score * slider_val) + (l_score * (1.0 - slider_val))
-        if slider_val > 0.5 and plays == 0: weight += 30
-        scored_list.append((track, weight))
-
-    scored_list.sort(key=lambda x: x[1], reverse=True)
-    return [t[0] for t in scored_list[:limit]]
-
 def expand_via_sonic_albums(seed_tracks, plex, sonic_limit, exclude_keys, filter_criteria, **kwargs):
     albums = []
     seen = set()
@@ -657,10 +624,7 @@ def expand_via_sonic_albums(seed_tracks, plex, sonic_limit, exclude_keys, filter
     # 2. Find Sonic Similar Albums (BOOSTED)
     expanded_albums = list(albums)
     for album in albums:
-        # BOOST: Fetch 2x the requested limit (min 40) to ensure diversity.
-        # This prevents running out of tracks when Artist Caps are strict.
         boosted_limit = max(40, sonic_limit * 2)
-        
         for s in get_sonic_similar_albums(album, limit=boosted_limit):
             rk = getattr(s, "ratingKey", None)
             if rk and rk not in seen:
@@ -672,8 +636,7 @@ def expand_via_sonic_albums(seed_tracks, plex, sonic_limit, exclude_keys, filter
 
     # 3. EXTRACT NEW VARIABLES
     exploit_weight = float(kwargs.get('exploit_weight', 0.5))
-    recent_days = int(kwargs.get('recent_days', 0))
-    recent_weight = float(kwargs.get('recent_weight', 1.0))
+    recency_bias = float(kwargs.get('recency_bias', 0.0))  # <--- NEW
     
     for album in expanded_albums:
         try:
@@ -681,18 +644,16 @@ def expand_via_sonic_albums(seed_tracks, plex, sonic_limit, exclude_keys, filter
 
             # --- SMART SORT: Pick the Best/Newest tracks from this album ---
             tracks = smart_sort_candidates(
-                tracks, exploit_weight, use_popularity=True,
-                recent_days=recent_days, recent_weight=recent_weight
+                tracks, exploit_weight, 
+                recency_bias=recency_bias, # <--- PASSED HERE
+                use_popularity=True
             )
-            # ---------------------------------------------------------------
 
             count = 0
             for t in tracks:
                 if track_passes_static_filters(t, plex, set(), exclude_keys, **filter_criteria, reject_reasons=dummy_rejects):
                     results.append(t)
                     count += 1
-                
-                # Cap tracks per album to maintain variety
                 if count >= 6: break
         except: continue
         
@@ -704,10 +665,7 @@ def expand_via_sonic_artists(seed_artists, plex, sonic_limit, exclude_keys, filt
 
     # 1. Find Sonic Similar Artists (BOOSTED)
     for a in seed_artists:
-        # BOOST: Fetch 2x the requested limit (min 40) to ensure we have 
-        # enough unique artists to survive strict "Max Tracks Per Artist" caps.
         boosted_limit = max(40, sonic_limit * 2)
-        
         for s in get_sonic_similar_artists(a, limit=boosted_limit):
             rk = getattr(s, "ratingKey", None)
             if rk and rk not in seen:
@@ -719,8 +677,7 @@ def expand_via_sonic_artists(seed_artists, plex, sonic_limit, exclude_keys, filt
 
     # 2. EXTRACT NEW VARIABLES
     exploit_weight = float(kwargs.get('exploit_weight', 0.5))
-    recent_days = int(kwargs.get('recent_days', 0))
-    recent_weight = float(kwargs.get('recent_weight', 1.0))
+    recency_bias = float(kwargs.get('recency_bias', 0.0)) # <--- NEW
     
     # 3. Harvest Tracks
     for artist in artists:
@@ -729,17 +686,15 @@ def expand_via_sonic_artists(seed_artists, plex, sonic_limit, exclude_keys, filt
             tracks = artist.tracks()
 
             tracks = smart_sort_candidates(
-                tracks, exploit_weight, use_popularity=True,
-                recent_days=recent_days, recent_weight=recent_weight
+                tracks, exploit_weight, 
+                recency_bias=recency_bias, # <--- PASSED HERE
+                use_popularity=True
             )
 
             for track in tracks:
                 if track_passes_static_filters(track, plex, set(), exclude_keys, **filter_criteria, reject_reasons=dummy_rejects):
                     results.append(track)
                     valid += 1
-                
-                # We cap harvest at 25 per artist to save time. 
-                # Since your UI cap is likely lower (e.g. 3-4), this is plenty.
                 if valid >= 25: break
         except: continue
         
@@ -755,8 +710,7 @@ def expand_via_sonic_tracks(seed_tracks, plex, sonic_limit, exclude_keys, filter
     
     # 1. EXTRACT NEW VARIABLES
     exploit_weight = float(kwargs.get('exploit_weight', 0.5))
-    recent_days = int(kwargs.get('recent_days', 0))
-    recent_weight = float(kwargs.get('recent_weight', 1.0))
+    recency_bias = float(kwargs.get('recency_bias', 0.0)) # <--- Fixed: Gets from kwargs, not pl_cfg
 
     if len(seed_tracks) > 0:
         matches_per_seed = int((target_total / len(seed_tracks)) + 2)
@@ -781,10 +735,11 @@ def expand_via_sonic_tracks(seed_tracks, plex, sonic_limit, exclude_keys, filter
                 sims = [t for t in related if isinstance(t, Track)]
             except: pass
 
-        # 2. APPLY SMART SORT
+        # 2. APPLY SMART SORT (Preserve Sonic Order as Base)
         sims = smart_sort_candidates(
-            sims, exploit_weight, use_popularity=False, 
-            recent_days=recent_days, recent_weight=recent_weight
+            sims, exploit_weight, 
+            recency_bias=recency_bias,
+            use_popularity=False  # <--- FALSE: Respects the Sonic Similarity order
         )
 
         count = 0
@@ -816,8 +771,7 @@ def expand_album_echoes(seed_tracks, plex, exclude_keys, filter_criteria, **kwar
     
     # 1. EXTRACT NEW VARIABLES
     exploit_weight = float(kwargs.get('exploit_weight', 0.5))
-    recent_days = int(kwargs.get('recent_days', 0))
-    recent_weight = float(kwargs.get('recent_weight', 1.0))
+    recency_bias = float(kwargs.get('recency_bias', 0.0)) # <--- Cleaned
     
     log_detail(f"Deep Dive (Smart): Scanning {len(albums)} albums...")
 
@@ -830,8 +784,9 @@ def expand_album_echoes(seed_tracks, plex, exclude_keys, filter_criteria, **kwar
             
             # 2. APPLY SMART SORT
             tracks = smart_sort_candidates(
-                tracks, exploit_weight, use_popularity=True,
-                recent_days=recent_days, recent_weight=recent_weight
+                tracks, exploit_weight, 
+                recency_bias=recency_bias,
+                use_popularity=True
             )
             
             unplayed = []
@@ -883,11 +838,6 @@ def expand_album_echoes(seed_tracks, plex, exclude_keys, filter_criteria, **kwar
             album_pools[key] = pool[per_survivor:]
 
     return results
-
-
-# ---------------------------------------------------------------------------
-# SONIC JOURNEY & SMOOTHING
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # SONIC JOURNEY & SMOOTHING
@@ -1256,15 +1206,13 @@ def convert_preset_to_payload(flat_cfg: dict) -> dict:
             "max_year": _int("pc_max_year", 0),
             "min_duration_sec": _int("pc_min_duration", 0),
             "max_duration_sec": _int("pc_max_duration", 0),
-            "recently_added_days": _int("pc_recent_days", 0),
-            "recently_added_weight": _float("pc_recent_weight", 0.0),
+            "recency_bias": _float("pc_recency_bias", 0.0),
             "max_tracks_per_artist": _int("pc_max_artist", 0),
             "max_tracks_per_album": _int("pc_max_album", 0),
             "history_min_rating": _int("pc_hist_min_rating", 0),
             "history_max_play_count": _int("pc_hist_max_play_count", -1),
             "seed_mode": seed_mode_map.get(flat_cfg.get("pc_seed_mode_label", ""), "history"),
             "seed_fallback_mode": flat_cfg.get("pc_seed_fallback_mode", "history"),
-            "new_vs_legacy_slider": 0.5,
             "genre_strict": _bool("pc_genre_strict"),
             "allow_off_genre_fraction": _float("pc_allow_off_genre", 0.2),
             "seed_track_keys": _list("pc_seed_tracks"),
@@ -1498,14 +1446,12 @@ def main() -> int:
     
     candidates = []
     inc_cols = {str(x).strip() for x in pl_cfg.get("include_collections", []) if str(x).strip()}
-    slider = float(pl_cfg.get("new_vs_legacy_slider", 0.5))
+    recency_bias = float(pl_cfg.get("recency_bias", 0.0))
     exploit_weight = float(pl_cfg.get("exploit_weight", 0.7))
-    recent_days = int(pl_cfg.get("recently_added_days", 0))
-    recent_weight = float(pl_cfg.get("recently_added_weight", 1.0))
 
     if seed_mode == "strict_collection" and inc_cols:
-        strict_res = expand_strict_collection(music, inc_cols, slider, max_tracks*4)
-        candidates.extend(strict_res)
+        # Just gather the tracks. The Smart Sort (Phase 2) will handle the order/recency.
+        candidates.extend(collect_seed_tracks_from_collections(music, inc_cols))
         
     # Mode: Sonic History (Intersection) with Smart Backfill
     if seed_mode == "sonic_history":
@@ -1517,7 +1463,8 @@ def main() -> int:
             try:
                 expanded = expand_via_sonic_albums(
                     seed_tracks, plex, sonic_limit, excluded_keys, filter_criteria,
-                    exploit_weight=exploit_weight, recent_days=recent_days, recent_weight=recent_weight
+                    exploit_weight=exploit_weight, 
+                    recency_bias=recency_bias
                 )
                 sonic_pool.extend(expanded)
             except: pass
@@ -1526,7 +1473,8 @@ def main() -> int:
             try:
                 expanded = expand_via_sonic_artists(
                     seed_artists, plex, sonic_limit, excluded_keys, filter_criteria,
-                    exploit_weight=exploit_weight, recent_days=recent_days, recent_weight=recent_weight
+                    exploit_weight=exploit_weight, 
+                    recency_bias=recency_bias
                 )
                 sonic_pool.extend(expanded)
             except: pass
@@ -1573,7 +1521,7 @@ def main() -> int:
             seed_tracks, plex, sonic_limit, excluded_keys, 
             filter_criteria, max_tracks=max_tracks, 
             exploit_weight=exploit_weight,
-            recent_days=recent_days, recent_weight=recent_weight # <--- ADDED
+            recency_bias=recency_bias
         ))
 
     # Mode: Deep Dive (Album Echoes)
@@ -1583,7 +1531,7 @@ def main() -> int:
             seed_tracks, plex, excluded_keys, 
             filter_criteria, max_tracks=max_tracks, 
             exploit_weight=exploit_weight,
-            recent_days=recent_days, recent_weight=recent_weight # <--- ADDED
+            recency_bias=recency_bias
         ))
 
     # Mode: Sonic Journey
@@ -1598,13 +1546,15 @@ def main() -> int:
         if "album" in seed_mode or "combo" in seed_mode:
             candidates.extend(expand_via_sonic_albums(
                 seed_tracks, plex, sonic_limit, excluded_keys, filter_criteria,
-                exploit_weight=exploit_weight, recent_days=recent_days, recent_weight=recent_weight
+                exploit_weight=exploit_weight, 
+                recency_bias=recency_bias
             ))
             
         if "artist" in seed_mode or "combo" in seed_mode:
             candidates.extend(expand_via_sonic_artists(
                 seed_artists, plex, sonic_limit, excluded_keys, filter_criteria,
-                exploit_weight=exploit_weight, recent_days=recent_days, recent_weight=recent_weight
+                exploit_weight=exploit_weight, 
+                recency_bias=recency_bias
             ))
             
     if not candidates and seed_mode in ["history", "genre"]:
@@ -1678,12 +1628,20 @@ def main() -> int:
     # --- PHASE 2: RANKING (Skip for Journey) ---
     # Sonic Journey's order IS the logic. Do not scramble it with Smart Sort.
     if seed_mode != "sonic_journey":
+        recency_bias = float(pl_cfg.get("recency_bias", 0.0))
+        
+        # Default to Popularity as base
+        use_pop = True
+        
+        # Optional: Force "Order" base for Strict Collection if you want to respect the collection's sort
+        if seed_mode == "strict_collection":
+             use_pop = False
+
         valid_candidates = smart_sort_candidates(
             valid_candidates, 
             exploit_weight, 
-            use_popularity=True, 
-            recent_days=recent_days, 
-            recent_weight=recent_weight
+            recency_bias=recency_bias,
+            use_popularity=use_pop
         )
 
     # --- PHASE 3: SELECTION (Caps) ---
