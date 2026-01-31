@@ -32,7 +32,7 @@ def check_github_updates():
         pass # Fail silently if no internet or API limit hit
     return None, None
 
-APP_TITLE = "Plex Music Library — Organizer"
+APP_TITLE = "Plex Music Library Organizer"
 APP_DIR = os.getcwd()
 SCRIPTS_DIR = os.path.join(APP_DIR, "Scripts")
 # Define the Exports directory
