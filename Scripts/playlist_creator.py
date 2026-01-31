@@ -1246,24 +1246,6 @@ def convert_preset_to_payload(flat_cfg: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--preset", type=str, help="Name of a preset JSON file to load")
-    args, unknown = parser.parse_known_args()
-
-    # MODE 1: CLI Preset (User Scripts)
-    if args.preset:
-        # Load the preset JSON from the presets folder
-        # Overwrite defaults with these values
-        # Run the generation
-        pass
-
-    # MODE 2: Streamlit Payload
-    else:
-        # Read from stdin as you do now
-        input_data = sys.stdin.read()
-        if input_data:
-             payload = json.loads(input_data)
-             # Run the generation
 
     start_time = time.time()
     
@@ -1740,7 +1722,7 @@ def main() -> int:
             playlist = plex.createPlaylist(title, items=final_tracks)
             log(f"✨ Created new playlist: {title}")
 
-        playlist.editSummary(desc)
+        playlist.edit(summary=desc)
 
         thumb_file = f"thumb_{playlist.ratingKey}.png"
         create_playlist_thumbnail(title, thumb_file)
