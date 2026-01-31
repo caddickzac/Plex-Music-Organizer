@@ -1320,8 +1320,6 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         
         # Visual labels directly underneath the slider
         lbl_c1, lbl_c2 = st.columns(2)
-        lbl_c1.caption("⬅️ Popularity / Similarity")
-        lbl_c2.markdown("<p style='text-align: right; color: gray; font-size: small;'>Recently Added ➡️</p>", unsafe_allow_html=True)
 
     st.markdown("### Artist / album caps")
     aa1, aa2 = st.columns(2)
