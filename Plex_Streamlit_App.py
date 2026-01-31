@@ -5,15 +5,32 @@ import re
 import json
 import hashlib
 import subprocess
+import requests
 from dataclasses import dataclass, field
 from typing import Dict, List
 from glob import glob
-
 import streamlit as st
-st.set_page_config(page_title="Plex Music Library — Organizer", page_icon="🎵", layout="wide")
-
 import pandas as pd
 from plexapi.server import PlexServer  # type: ignore
+
+# --- Version Configuration ---
+CURRENT_VERSION = "v1.0.0"
+REPO_OWNER = "caddickzac"
+REPO_NAME = "Plex-Music-Organizer"
+
+@st.cache_data(ttl=10800)  # Check every 4 hours
+def check_github_updates():
+    try:
+        url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+        response = requests.get(url, timeout=2)
+        if response.status_code == 200:
+            data = response.json()
+            latest_version = data["tag_name"]
+            html_url = data["html_url"]
+            return latest_version, html_url
+    except:
+        pass # Fail silently if no internet or API limit hit
+    return None, None
 
 APP_TITLE = "Plex Music Library — Organizer"
 APP_DIR = os.getcwd()
@@ -25,6 +42,9 @@ PLAYLIST_CREATOR_SCRIPT = os.path.join(SCRIPTS_DIR, "playlist_creator.py")
 
 # NEW: where playlist presets will live
 PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
+
+st.set_page_config(page_title="Plex Music Library — Organizer", page_icon="🎵", layout="wide")
+
 
 # ---------------------------
 # Config dataclass
@@ -530,6 +550,22 @@ def ui_sidebar_config() -> AppConfig:
         st.sidebar.caption("✅ Loaded from Container Environment")
     elif file_cfg.plex_baseurl or file_cfg.plex_token:
         st.sidebar.caption("✅ Loaded from config.txt")
+
+    # --- Version Footer in Sidebar ---
+    with st.sidebar:
+        st.markdown("---") # Horizontal line separator
+        
+        # 1. Display Local Version
+        st.caption(f"App Version: {CURRENT_VERSION}")
+
+        # 2. Check for Updates
+        latest_version, release_url = check_github_updates()
+        
+        if latest_version and latest_version != CURRENT_VERSION:
+            st.warning(f"🚀 Update Available: {latest_version}")
+            st.markdown(f"[View Release Notes]({release_url})")
+        elif latest_version:
+            st.caption("✅ Up to date")
 
     return AppConfig(
         plex_baseurl=baseurl.strip(), 
