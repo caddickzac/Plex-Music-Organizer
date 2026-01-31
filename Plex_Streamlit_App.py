@@ -1031,9 +1031,30 @@ def ui_playlist_creator_tab(cfg: AppConfig):
 
     def handle_reset_inputs():
         """Clears all playlist creator session keys, reverting widgets to defaults."""
+        
+        # List of text keys we want to FORCE to empty strings
+        text_keys = [
+            "pc_preset_name", 
+            "pc_custom_title",
+            "pc_lib",
+            "pc_seed_tracks", 
+            "pc_seed_artists", 
+            "pc_seed_playlists", 
+            "pc_seed_collections", 
+            "pc_seed_genres",
+            "pc_include_collections", 
+            "pc_exclude_collections", 
+            "pc_exclude_genres"
+        ]
+
         for k in ALL_PRESET_KEYS:
             if k in st.session_state:
-                del st.session_state[k]
+                if k in text_keys:
+                    # Force text inputs to empty string so the UI updates
+                    st.session_state[k] = ""
+                else:
+                    # For sliders/numbers, deleting the key lets the widget use its default value
+                    del st.session_state[k]
         
         # Reset the preset dropdown to "<none>"
         if "pc_preset_select" in st.session_state:
@@ -1084,8 +1105,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
     # Core playlist UI
     # ---------------------------
 
-    # Music library name
-    music_lib = st.text_input("Music library name", value=cfg.plex_library, key="pc_lib")
+    music_lib = cfg.plex_library
 
     # Playlist naming (custom title)
     st.markdown("### Playlist naming")
@@ -1365,26 +1385,26 @@ def ui_playlist_creator_tab(cfg: AppConfig):
     gcol1, gcol2 = st.columns(2)
     with gcol1:
         genre_seeds_raw = st.text_input(
-            "Genre seeds (comma-separated, album-level)",
+            "Genre seeds (comma-separated, track or album)",
             value=st.session_state.get("pc_seed_genres", ""),
             placeholder="e.g., Rock, Psychedelic Rock, Jazz",
             key="pc_seed_genres",
         )
         include_collections_raw = st.text_input(
-            "Include only collections (comma-separated, album-level)",
+            "Include only collections (comma-separated)",
             value=st.session_state.get("pc_include_collections", ""),
             placeholder="e.g., Classic Rock, Sunday Psych",
             key="pc_include_collections",
         )
     with gcol2:
         exclude_collections_raw = st.text_input(
-            "Exclude collections (comma-separated, album-level)",
+            "Exclude collections (comma-separated)",
             value=st.session_state.get("pc_exclude_collections", ""),
             placeholder="e.g., Christmas, Kids Music",
             key="pc_exclude_collections",
         )
         exclude_genres_raw = st.text_input(
-            "Exclude genres (comma-separated, album-level)",
+            "Exclude genres (comma-separated)",
             value=st.session_state.get("pc_exclude_genres", ""),
             placeholder="e.g., Holiday, Comedy",
             key="pc_exclude_genres",

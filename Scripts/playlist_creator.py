@@ -23,6 +23,9 @@ import textwrap
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 from typing import List, Dict, Optional, Set, Tuple
+import warnings
+# Suppress the noise about "edit" vs "editSummary"
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Try/Except to handle missing libraries on different machines
 try:
@@ -44,6 +47,7 @@ except ImportError:
 
 BAR_LEN = 30
 _ALBUM_CACHE = {}
+_ARTIST_METADATA_CACHE = {}
 
 # ---------------------------------------------------------------------------
 # LOGGING HELPER
@@ -434,9 +438,10 @@ def track_passes_static_filters(
             reject_reasons["duration"] += 1
             return False
 
-    # 5. Album Metadata (Year, Collections, Genres)
+    # 5. Metadata Checks (Album, Track, and Artist Levels)
     album = resolve_album(track, plex)
     
+    # A. Year Check
     if min_year > 0 or max_year > 0:
         y = _album_year(album) or getattr(track, 'year', 0) or 0
         if not y:
@@ -449,22 +454,55 @@ def track_passes_static_filters(
             reject_reasons["year_too_new"] += 1
             return False
 
-    colls, genres = _album_collections_and_genres(album)
+    # B. Gather Metadata for Inclusion/Exclusion (Lazy Load Artist)
     
-    if include_collections and not colls.intersection(include_collections):
-        reject_reasons["collections"] += 1
-        return False
+    # -- Level 1: Album & Track (Fast) --
+    alb_colls, alb_genres = _album_collections_and_genres(album)
     
-    if exclude_collections and colls.intersection(exclude_collections):
-        reject_reasons["collections"] += 1
-        return False
+    try:
+        trk_colls = {c.tag.strip() for c in getattr(track, 'collections', [])}
+        trk_genres = {g.tag.strip().lower() for g in getattr(track, 'genres', [])}
+    except:
+        trk_colls, trk_genres = set(), set()
 
-    if exclude_genres and genres.intersection(exclude_genres):
-        reject_reasons["genre_exclude"] += 1
-        return False
+    # -- Level 2: Artist (Cached Fetch) --
+    art_colls, art_genres = set(), set()
+    
+    # Fetch artist if we have ANY collection/genre filters active (Include OR Exclude)
+    if exclude_collections or exclude_genres or include_collections:
+        ark = getattr(track, "grandparentRatingKey", None)
+        if ark:
+            if ark in _ARTIST_METADATA_CACHE:
+                art_colls, art_genres = _ARTIST_METADATA_CACHE[ark]
+            else:
+                try:
+                    # Fetch Artist object to check its collections/genres
+                    artist_obj = plex.fetchItem(ark)
+                    art_colls = {c.tag.strip() for c in getattr(artist_obj, 'collections', [])}
+                    art_genres = {g.tag.strip().lower() for g in getattr(artist_obj, 'genres', [])}
+                    _ARTIST_METADATA_CACHE[ark] = (art_colls, art_genres)
+                except:
+                    _ARTIST_METADATA_CACHE[ark] = (set(), set())
 
-    # If we made it here, the track is valid!
-    # Note: We do NOT add to cand_seen here automatically, to allow logic flexibility in calling functions.
+    # 6. Apply Inclusions (ALL LEVELS: Track OR Album OR Artist)
+    # If include_collections is set, the item MUST match at least one level.
+    if include_collections:
+        if not (alb_colls | trk_colls | art_colls).intersection(include_collections):
+            reject_reasons["collections"] += 1
+            return False
+    
+    # 7. Apply Exclusions (ALL LEVELS: Track OR Album OR Artist)
+    if exclude_collections:
+        if (alb_colls | trk_colls | art_colls).intersection(exclude_collections):
+            reject_reasons["collections"] += 1
+            return False
+
+    if exclude_genres:
+        if (alb_genres | trk_genres | art_genres).intersection(exclude_genres):
+            reject_reasons["genre_exclude"] += 1
+            return False
+
+    # Track is valid!
     return True
 
 # ---------------------------------------------------------------------------
