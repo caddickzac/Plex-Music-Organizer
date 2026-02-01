@@ -1,4 +1,4 @@
-# Plex Music Organizer
+# Plex Music Library Organizer
 
 A powerful **Streamlit** application running on Unraid (or locally) to organize, automate, and curate your Plex Music library.
 
