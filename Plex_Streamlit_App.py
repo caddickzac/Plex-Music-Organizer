@@ -1475,7 +1475,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             key="pc_hist_max_play_count",
         )
 
-    st.markdown("### Genre & collections filters (album-level)")
+    st.markdown("### Genre & collections filters")
 
     gcol1, gcol2 = st.columns(2)
     with gcol1:
@@ -1506,11 +1506,11 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         )
 
     genre_strict = st.checkbox(
-        "Genre strict (enforce album genres against genre_seeds)",
+        "Genre strict (enforce genres against genre seeds)",
         value=st.session_state.get("pc_genre_strict", False),
         key="pc_genre_strict",
         help=(
-            "If checked, album genres must intersect with genre_seeds. "
+            "If checked, album genres must intersect with genre seeds. "
             "Off-genre tracks can still appear up to the allowed fraction."
         ),
     )
@@ -1606,19 +1606,19 @@ def ui_playlist_creator_tab(cfg: AppConfig):
             placeholder="e.g., Bill Evans, Miles Davis",
             key="pc_seed_artists",
         )
-        seed_playlist_names_raw = st.text_input(
-            "Seed playlist names (comma-separated)",
-            value=st.session_state.get("pc_seed_playlists", ""),
-            placeholder="e.g., Dinner Party",
-            key="pc_seed_playlists",
-        )
-
+        
     with col2:
         seed_collection_names_raw = st.text_input(
             "Seed collection names (comma-separated)",
             value=st.session_state.get("pc_seed_collections", ""),
             placeholder="e.g., All That Jazz",
             key="pc_seed_collections",
+        )
+        seed_playlist_names_raw = st.text_input(
+            "Seed playlist names (comma-separated)",
+            value=st.session_state.get("pc_seed_playlists", ""),
+            placeholder="e.g., Dinner Party",
+            key="pc_seed_playlists",
         )
 
     seed_track_keys = _parse_list(seed_track_keys_raw)
