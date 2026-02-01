@@ -1153,10 +1153,37 @@ def collect_seed_tracks_from_collections(music, names):
     seeds = []
     for n in names:
         try:
-            res = music.search(collection=n)
-            for r in res:
-                if hasattr(r, 'tracks'): seeds.extend(r.tracks())
-        except: pass
+            # 1. FETCH THE COLLECTION OBJECT (Correct Method)
+            # This finds the actual Collection container, not just tagged items.
+            res = music.collections(title=n)
+            
+            # 2. Fallback: Try stripping "Albums:" or "Artists:" if exact match fails
+            if not res:
+                clean = n.replace("Albums:", "").replace("Artists:", "").strip()
+                res = music.collections(title=clean)
+            
+            if not res:
+                log_warning(f"⚠️ Could not find Collection named '{n}' (or '{clean}')")
+                continue
+
+            for col in res:
+                # 3. UNPACK THE COLLECTION
+                # Smart Collections calculate their items dynamically here.
+                items = col.items()
+                log_detail(f"Collection '{col.title}': Found {len(items)} items.")
+                
+                for item in items:
+                    # Case A: Album or Artist -> Get their tracks
+                    if hasattr(item, 'tracks'):
+                        seeds.extend(item.tracks())
+                    # Case B: Track -> Use directly
+                    elif hasattr(item, 'ratingKey'):
+                        seeds.append(item)
+                        
+        except Exception as e:
+            log_warning(f"Error processing collection '{n}': {e}")
+            pass
+            
     return seeds
 
 def convert_preset_to_payload(flat_cfg: dict) -> dict:
@@ -1449,10 +1476,24 @@ def main() -> int:
     recency_bias = float(pl_cfg.get("recency_bias", 0.0))
     exploit_weight = float(pl_cfg.get("exploit_weight", 0.7))
 
+    # STRICT MODE REPAIR: Treat "Include Collections" as the source
     if seed_mode == "strict_collection" and inc_cols:
-        # Just gather the tracks. The Smart Sort (Phase 2) will handle the order/recency.
-        candidates.extend(collect_seed_tracks_from_collections(music, inc_cols))
+        log_detail(f"Strict Mode: Gathering tracks from collections: {list(inc_cols)}")
+        col_tracks = collect_seed_tracks_from_collections(music, inc_cols)
         
+        if col_tracks:
+            # Add them to candidates (avoiding duplicates)
+            current_keys = {t.ratingKey for t in candidates}
+            count = 0
+            for t in col_tracks:
+                if t.ratingKey not in current_keys:
+                    candidates.append(t)
+                    current_keys.add(t.ratingKey)
+                    count += 1
+            log_detail(f"Added {count} tracks from collection filters.")
+        else:
+            log_warning(f"⚠️ Found 0 tracks in collections {inc_cols}. Check for typos (e.g. 'Albums:' prefix).")
+
     # Mode: Sonic History (Intersection) with Smart Backfill
     if seed_mode == "sonic_history":
         log_detail(f"Running Sonic History Intersection (History: {len(h_seeds)} items)...")
@@ -1557,7 +1598,8 @@ def main() -> int:
                 recency_bias=recency_bias
             ))
             
-    if not candidates and seed_mode in ["history", "genre"]:
+    # If no "new" music was found (or mode is strict), use the seeds themselves as candidates.
+    if not candidates and seed_mode in ["history", "genre", "strict_collection"]:
         candidates = list(seed_tracks)
 
     # ------------------------------------------------------------------
