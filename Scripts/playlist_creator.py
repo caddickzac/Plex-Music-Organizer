@@ -981,58 +981,117 @@ def expand_sonic_journey(seed_tracks, plex, target_count: int = 50, **kwargs) ->
 
 def smooth_playlist_gradient(tracks: List[Track], plex: PlexServer) -> List[Track]:
     """
-    Reorders tracks to create a sonic gradient, with penalties for repetitive artists.
-    Starts with a RANDOM track to ensure fresh journeys on every run.
+    UPGRADED SONIC SMOOTHING (The "Smart Mix"):
+    1. SCOUT: Checks the top 10 tracks to see which one creates the best starting link.
+    2. CHAIN: Plays that track, then finds the best sonic/BPM match from the remaining pool.
+    3. SEPARATION: Actively prevents the same artist from playing back-to-back.
     """
+    if not tracks: return []
     if len(tracks) < 3: return tracks
-    
-    log_status(70, "Smoothing playlist gradient (Anti-Clump Mode)...")
-    
-    pool = list(tracks)
-    
-    # --- CHANGE: Pick a RANDOM start track instead of the first one ---
-    import random
-    start_index = random.randint(0, len(pool) - 1)
-    ordered = [pool.pop(start_index)]
-    # ------------------------------------------------------------------
-    
-    while pool:
-        current = ordered[-1]
-        best_next = None
-        best_score = -999 # Allow for negative scores
-        
-        curr_artist = getattr(current, "grandparentTitle", "") or getattr(current, "originalTitle", "")
-        
-        try:
-            # Ask Plex for neighbors
-            sims = get_sonic_similar_tracks(current, limit=50)
-            sim_keys = [t.ratingKey for t in sims]
-            
-            for candidate in pool:
-                if candidate.ratingKey in sim_keys:
-                    idx = sim_keys.index(candidate.ratingKey)
-                    score = 100 - idx
-                    
-                    # Artist Penalty
-                    cand_artist = getattr(candidate, "grandparentTitle", "") or getattr(candidate, "originalTitle", "")
-                    if curr_artist and cand_artist and curr_artist == cand_artist:
-                        score -= 25 
 
-                    if score > best_score:
-                        best_score = score
-                        best_next = candidate
-                        
-        except: pass
-        
-        if best_next:
-            ordered.append(best_next)
-            pool.remove(best_next)
-        else:
-            # Dead end: Pick a random next track to jump out of the rut
-            fallback = pool.pop(0)
-            ordered.append(fallback)
+    log_status(70, "Smoothing playlist gradient (Smart Sonic Sort)...")
+    
+    # We work with a copy so we don't break the original list if we abort
+    pool = tracks.copy()
+    
+    # --- PHASE 1: THE SCOUT (Find the best starting point) ---
+    # Instead of blindly picking #1, we check the top 10 to see who connects best.
+    
+    scout_candidates = pool[:10] 
+    best_start_track = pool[0] 
+    best_link_score = 9999
+    
+    # We define a helper to get neighbors safely using the existing script function
+    def get_neighbors(t, limit=20):
+        return get_sonic_similar_tracks(t, limit)
+
+    log_detail(f"Scouting best start from top {len(scout_candidates)} tracks...")
+
+    for cand in scout_candidates:
+        try:
+            # who sounds like this candidate?
+            sims = get_neighbors(cand, limit=20) 
             
-    return ordered
+            # Check if any of these similar tracks are in our pool (and diff artist)
+            for rank, s in enumerate(sims):
+                # Check if 's' is in our pool and satisfies artist separation
+                # We prioritize tighter matches (lower rank)
+                for p in pool:
+                    if p.ratingKey == s.ratingKey and p.grandparentTitle != cand.grandparentTitle:
+                        if rank < best_link_score:
+                            best_link_score = rank
+                            best_start_track = cand
+                        break 
+                if best_link_score == 0: break # Can't beat perfect
+        except: pass
+
+    # Start the playlist with the winner
+    if best_start_track in pool:
+        pool.remove(best_start_track)
+        playlist = [best_start_track]
+        if best_link_score < 9999:
+            log_detail(f"Selected Start: '{best_start_track.title}' (Link Rank: {best_link_score})")
+    else:
+        playlist = [pool.pop(0)]
+
+    # --- PHASE 2: THE CHAIN (Weave the rest) ---
+    while pool:
+        current_track = playlist[-1]
+        best_candidate = None
+        best_index = -1
+        
+        # Priority 1: Sonic Match
+        try:
+            sims = get_neighbors(current_track, limit=50)
+            
+            # Look for the first match that is IN our pool AND distinct artist
+            for s in sims:
+                for i, p in enumerate(pool):
+                    if p.ratingKey == s.ratingKey:
+                        # Artist Constraint
+                        if p.grandparentTitle != current_track.grandparentTitle:
+                            best_candidate = p
+                            best_index = i
+                            break
+                if best_candidate: break
+        except: pass
+
+        # Priority 2: BPM Match (Fallback)
+        # If no sonic match, find a track with similar energy
+        if not best_candidate and hasattr(current_track, 'bpm') and current_track.bpm:
+            current_bpm = current_track.bpm
+            closest_diff = 1000
+            
+            for i, p in enumerate(pool):
+                # Skip same artist
+                if p.grandparentTitle == current_track.grandparentTitle: continue
+                
+                if hasattr(p, 'bpm') and p.bpm:
+                    diff = abs(p.bpm - current_bpm)
+                    # Only link if it's actually close (within 8 BPM)
+                    if diff < closest_diff and diff < 8:
+                        closest_diff = diff
+                        best_candidate = p
+                        best_index = i
+
+        # Priority 3: Any Different Artist (Final Fallback)
+        if not best_candidate:
+            for i, p in enumerate(pool):
+                if p.grandparentTitle != current_track.grandparentTitle:
+                    best_candidate = p
+                    best_index = i
+                    break
+        
+        # Priority 4: Emergency (Just take the next one, even if same artist)
+        if not best_candidate:
+            best_candidate = pool[0]
+            best_index = 0
+
+        # Move track from Pool to Playlist
+        playlist.append(best_candidate)
+        pool.pop(best_index)
+
+    return playlist
 
 # ---------------------------------------------------------------------------
 # DATA HELPERS
