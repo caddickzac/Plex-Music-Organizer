@@ -328,8 +328,7 @@ def read_csv_forgiving(uploaded_file) -> pd.DataFrame:
 # ---------------------------
 # Compare helpers
 # ---------------------------
-COMPARE_VARS = ["Artist_Collections", "Album_Collections", "Track_Collections", "Playlists", "User_Rating"]
-KEY_COLS_POSITION = ["Album_Artist", "Album", "Disc #", "Track #"]
+FALLBACK_KEY_COLS = ["Album_Artist", "Album", "Disc #", "Track #"]
 
 def _norm_str(x) -> str:
     if x is None:
@@ -359,23 +358,46 @@ def _rating_to_float(x):
     except Exception:
         return None
 
-def _build_position_key(df: pd.DataFrame) -> pd.Series:
-    missing = [c for c in KEY_COLS_POSITION if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing key columns in CSV: {missing}. Needed for matching.")
-    parts = [df[c].astype(str).fillna("").str.strip() for c in KEY_COLS_POSITION]
-    return parts[0].str.cat(parts[1:], sep=" | ")
+def _build_smart_key(df: pd.DataFrame) -> tuple[pd.Series, str]:
+    """
+    Generates a match key using the best available unique identifier.
+    Priority: Track_ID > RatingKey > (Album_Artist + Album + Disc + Track)
+    Returns: (KeySeries, MethodName)
+    """
+    # 1. Try Track_ID (Common in custom exports)
+    if "Track_ID" in df.columns:
+        return df["Track_ID"].astype(str).str.strip(), "Track_ID"
+    
+    # 2. Try RatingKey (Standard Plex ID)
+    if "RatingKey" in df.columns:
+        return df["RatingKey"].astype(str).str.strip(), "RatingKey"
+    
+    # 3. Fallback to Positional Text Matching
+    missing = [c for c in FALLBACK_KEY_COLS if c not in df.columns]
+    if not missing:
+        parts = [df[c].astype(str).fillna("").str.strip() for c in FALLBACK_KEY_COLS]
+        combined = parts[0].str.cat(parts[1:], sep=" | ")
+        return combined, "Text Match (Artist+Album+Track)"
+        
+    raise ValueError(f"Could not find a match key. Requires 'Track_ID', 'RatingKey', or {FALLBACK_KEY_COLS}")
 
 def compare_exports_add_match_cols(
     old_df: pd.DataFrame,
     new_df: pd.DataFrame,
+    compare_vars: List[str],
     include_details: bool = False
 ) -> tuple[pd.DataFrame, dict]:
     old = old_df.copy()
     new = new_df.copy()
 
-    old["_key"] = _build_position_key(old)
-    new["_key"] = _build_position_key(new)
+    # Build keys using the smart logic
+    try:
+        old["_key"], method_old = _build_smart_key(old)
+        new["_key"], method_new = _build_smart_key(new)
+    except ValueError as e:
+        # If one file has IDs and the other doesn't, we might crash. 
+        # For simplicity, we assume they share the same schema.
+        raise ValueError(f"Key generation failed: {e}")
 
     old_dupes = int(old["_key"].duplicated().sum())
     new_dupes = int(new["_key"].duplicated().sum())
@@ -383,9 +405,12 @@ def compare_exports_add_match_cols(
     old1 = old.drop_duplicates("_key", keep="first")
     new1 = new.drop_duplicates("_key", keep="first")
 
-    old_cols = ["_key"] + [c for c in COMPARE_VARS if c in old1.columns]
+    # Only grab the columns you actually asked to compare
+    old_cols = ["_key"] + [c for c in compare_vars if c in old1.columns]
     old_sub = old1[old_cols].copy()
-    old_sub = old_sub.rename(columns={c: f"{c}__old" for c in COMPARE_VARS if c in old_sub.columns})
+    
+    # Rename old columns
+    old_sub = old_sub.rename(columns={c: f"{c}__old" for c in compare_vars if c in old_sub.columns})
 
     merged = new1.merge(old_sub, on="_key", how="left", indicator=True)
     found_mask = (merged["_merge"] == "both")
@@ -395,27 +420,23 @@ def compare_exports_add_match_cols(
     for i in range(len(merged)):
         k = merged.loc[i, "_key"]
         row_out = {}
-
         is_found = bool(found_mask.iloc[i])
 
-        for c in COMPARE_VARS:
+        for c in compare_vars:
             match_col = f"{c}_Match"
 
             if not is_found:
                 row_out[match_col] = "not found"
                 if include_details:
-                    if c == "User_Rating":
-                        row_out["User_Rating_Old"] = "not found"
-                    else:
-                        row_out[f"{c}_Old"] = "not found"
-                        row_out[f"{c}_Lost"] = "not found"
-                        row_out[f"{c}_Gained"] = "not found"
+                    row_out[f"{c}_Old"] = "not found"
+                    row_out[f"{c}_Lost"] = "not found"
+                    row_out[f"{c}_Gained"] = "not found"
                 continue
 
+            # Rating handling
             if c == "User_Rating":
                 new_val = merged.loc[i, c] if c in merged.columns else ""
                 old_val = merged.loc[i, f"{c}__old"] if f"{c}__old" in merged.columns else ""
-
                 n = _rating_to_float(new_val)
                 o = _rating_to_float(old_val)
 
@@ -427,12 +448,11 @@ def compare_exports_add_match_cols(
                     row_out[match_col] = "no"
 
                 if include_details:
-                    row_out["User_Rating_Old"] = _norm_str(old_val)
-
+                    row_out[f"{c}_Old"] = _norm_str(old_val)
             else:
+                # Set/String handling
                 new_val = merged.loc[i, c] if c in merged.columns else ""
                 old_val = merged.loc[i, f"{c}__old"] if f"{c}__old" in merged.columns else ""
-
                 nset = _parse_set(new_val)
                 oset = _parse_set(old_val)
 
@@ -447,17 +467,17 @@ def compare_exports_add_match_cols(
 
         per_key_cols[k] = row_out
 
-    result = new_df.copy()
-    result["_key"] = _build_position_key(result)
-
-    match_cols = [f"{c}_Match" for c in COMPARE_VARS]
-    for mc in match_cols:
+    result = new.copy()
+    
+    # Map results back
+    for c in compare_vars:
+        mc = f"{c}_Match"
         result[mc] = result["_key"].map(lambda k: per_key_cols.get(k, {}).get(mc, "not found"))
-
+        
     if include_details:
-        for c in COMPARE_VARS:
+        for c in compare_vars:
             if c == "User_Rating":
-                col = "User_Rating_Old"
+                col = f"{c}_Old"
                 result[col] = result["_key"].map(lambda k: per_key_cols.get(k, {}).get(col, "not found"))
             else:
                 for suffix in ["Old", "Lost", "Gained"]:
@@ -469,109 +489,197 @@ def compare_exports_add_match_cols(
     summary = {
         "old_rows": int(len(old_df)),
         "new_rows": int(len(new_df)),
-        "old_duplicate_keys": old_dupes,
-        "new_duplicate_keys": new_dupes,
-        "unique_old_keys": int(old1["_key"].nunique()),
-        "unique_new_keys": int(new1["_key"].nunique()),
+        "match_method": method_new,
         "matched_keys": int(found_mask.sum()),
         "unmatched_new_keys": int((~found_mask).sum()),
-        "include_details": bool(include_details),
+        "old_duplicate_keys": old_dupes,
+        "new_duplicate_keys": new_dupes,
     }
 
-    for c in COMPARE_VARS:
+    for c in compare_vars:
         mc = f"{c}_Match"
-        vc = result[mc].value_counts(dropna=False).to_dict()
-        summary[f"{mc}_counts"] = {str(k): int(v) for k, v in vc.items()}
+        if mc in result.columns:
+            vc = result[mc].value_counts(dropna=False).to_dict()
+            summary[f"{mc}_counts"] = {str(k): int(v) for k, v in vc.items()}
 
     return result, summary
 
 # ---------------------------
 # Sidebar config
 # ---------------------------
+
 def ui_sidebar_config() -> AppConfig:
-    st.sidebar.header("Configuration")
+    st.sidebar.header("Plex Connection")
 
-    # 1. Try Loading from Config File (Laptop method)
-    file_cfg = load_config_txt()
-    
-    # 2. Try Loading from Environment (Unraid/Docker method)
-    env_url = os.getenv("PLEX_URL", "")
-    env_token = os.getenv("PLEX_TOKEN", "")
-    env_lib = os.getenv("PLEX_LIBRARY_NAME", "Music") # Default to "Music"
-
-    # 3. Determine Defaults (Environment wins if present, otherwise Config file)
-    default_url = env_url if env_url else file_cfg.plex_baseurl
-    default_token = env_token if env_token else file_cfg.plex_token
-    if env_lib and env_lib != "Music":
-        default_lib = env_lib
-    elif file_cfg.plex_library:
-        default_lib = file_cfg.plex_library
+    # Check for updates
+    latest, url = check_github_updates()
+    if latest and latest != CURRENT_VERSION:
+        st.sidebar.success(f"**Update available:** [{latest}]({url})")
     else:
-        default_lib = "Music"
+        st.sidebar.caption(f"Version: {CURRENT_VERSION}")
 
-    # 4. Initialize Session State if needed
-    if "baseurl" not in st.session_state or not st.session_state["baseurl"]:
-        st.session_state["baseurl"] = default_url
-        
-    if "token" not in st.session_state or not st.session_state["token"]:
-        st.session_state["token"] = default_token
-        
-    if "library_name" not in st.session_state or not st.session_state["library_name"]:
-        st.session_state["library_name"] = default_lib
+    # Load defaults from config.txt or environment
+    defaults = load_config_txt()
+    env_url = os.getenv("PLEX_URL") or os.getenv("PLEX_BASEURL")
+    env_token = os.getenv("PLEX_TOKEN")
+    
+    # Priority: Env > Config.txt > Empty
+    def_url = env_url or defaults.plex_baseurl
+    def_token = env_token or defaults.plex_token
+    def_lib = defaults.plex_library
 
-    # 5. Render the inputs
-    baseurl = st.sidebar.text_input(
-        "Plex URL",
-        value=st.session_state["baseurl"],
-        placeholder="http://127.0.0.1:32400",
-        key="baseurl_input"
-    )
-    token = st.sidebar.text_input(
-        "Plex Token",
-        value=st.session_state["token"],
-        type="password",
-        placeholder="••••••••",
-        key="token_input"
-    )
-    lib_name = st.sidebar.text_input(
-        "Music Library Name",
-        value=st.session_state["library_name"],
-        placeholder="Music",
-        key="library_input",
-        help="The exact name of your music library in Plex (case-sensitive)."
-    )
+    # Draw Widgets
+    baseurl = st.sidebar.text_input("Plex URL", value=def_url, placeholder="http://192.168.1.5:32400")
+    token = st.sidebar.text_input("Plex Token", value=def_token, type="password")
+    lib_name = st.sidebar.text_input("Music Library Name", value=def_lib)
 
-    # Update session state on change
-    st.session_state["baseurl"] = baseurl
-    st.session_state["token"] = token
-    st.session_state["library_name"] = lib_name
+    st.sidebar.divider()
 
-    if env_url or env_token:
-        st.sidebar.caption("✅ Loaded from Container Environment")
-    elif file_cfg.plex_baseurl or file_cfg.plex_token:
-        st.sidebar.caption("✅ Loaded from config.txt")
-
-    # --- Version Footer in Sidebar ---
-    with st.sidebar:
-        st.markdown("---") # Horizontal line separator
-        
-        # 1. Display Local Version
-        st.caption(f"App Version: {CURRENT_VERSION}")
-
-        # 2. Check for Updates
-        latest_version, release_url = check_github_updates()
-        
-        if latest_version and latest_version != CURRENT_VERSION:
-            st.warning(f"🚀 Update Available: {latest_version}")
-            st.markdown(f"[View Release Notes]({release_url})")
-        elif latest_version:
-            st.caption("✅ Up to date")
+    if not baseurl or not token:
+        st.sidebar.warning("Please enter connection details.")
 
     return AppConfig(
-        plex_baseurl=baseurl.strip(), 
-        plex_token=token.strip(), 
+        plex_baseurl=baseurl.strip(),
+        plex_token=token.strip(),
         plex_library=lib_name.strip()
     )
+
+def ui_compare_tab():
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Zurich")
+    except Exception:
+        tz = None
+
+    st.subheader("Compare Exported Metadata")
+    st.caption(
+        "Upload an **old** and **new** export CSV. Tracks are matched by: "
+        "**Album_Artist + Album + Disc # + Track #**."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        old_up = st.file_uploader("Upload OLD export CSV", type=["csv"], key="compare_old")
+    with col2:
+        new_up = st.file_uploader("Upload NEW export CSV", type=["csv"], key="compare_new")
+
+    if old_up is None or new_up is None:
+        st.info("Upload both files to enable comparison.")
+        return
+
+    try:
+        old_df = read_csv_forgiving(old_up)
+        new_df = read_csv_forgiving(new_up)
+    except Exception as e:
+        st.error(f"Could not read one of the CSVs: {e}")
+        return
+
+    with st.expander("Preview (first 25 rows)"):
+        st.markdown("**OLD**")
+        st.dataframe(old_df.head(25), use_container_width=True)
+        st.markdown("**NEW**")
+        st.dataframe(new_df.head(25), use_container_width=True)
+
+    st.divider()
+
+    # Verify we have the columns needed to match rows
+    missing_old = [c for c in KEY_COLS_POSITION if c not in old_df.columns]
+    missing_new = [c for c in KEY_COLS_POSITION if c not in new_df.columns]
+    if missing_old or missing_new:
+        st.error(
+            f"Missing key columns needed for matching.\n\n"
+            f"- Missing in OLD: {missing_old}\n"
+            f"- Missing in NEW: {missing_new}\n\n"
+            f"Expected columns: {KEY_COLS_POSITION}"
+        )
+        return
+
+    # --- DYNAMIC COLUMN SELECTOR (CHECKLIST STYLE) ---
+    # 1. Find columns that exist in BOTH files (intersection)
+    # 2. Allow ALL common columns (including Track #, Disc #, etc.)
+    selectable_cols = [c for c in old_df.columns if c in new_df.columns]
+
+    st.markdown("### Select Columns to Compare")
+    st.caption("Check the variables you want to include in the comparison report.")
+
+    # --- Vertical Checklist Loop ---
+    selected_vars = []
+    
+    # Simple vertical list with NO defaults checked
+    for col_name in selectable_cols:
+        # value=False ensures they all start unchecked
+        if st.checkbox(col_name, value=False, key=f"compare_chk_{col_name}"):
+            selected_vars.append(col_name)
+    # ------------------------------------
+
+    st.divider()
+
+    include_details = st.checkbox(
+        "Include details (Old/Lost/Gained columns)",
+        value=False,
+        key="compare_details"
+    )
+
+    run = st.button("Run comparison", type="primary", key="compare_run")
+    if not run:
+        return
+        
+    if not selected_vars:
+        st.error("Please select at least one column to compare.")
+        return
+
+    try:
+        # Pass YOUR selected variables to the function
+        result_df, summary = compare_exports_add_match_cols(
+            old_df, new_df, 
+            compare_vars=selected_vars, 
+            include_details=include_details
+        )
+        st.success("Comparison complete.")
+
+        st.markdown("### Summary")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("OLD rows", summary["old_rows"])
+        m2.metric("NEW rows", summary["new_rows"])
+        m3.metric("Matched keys", summary["matched_keys"])
+        m4.metric("Unmatched NEW keys", summary["unmatched_new_keys"])
+
+        st.markdown("### Match breakdown")
+        for c in selected_vars:
+            mc = f"{c}_Match"
+            counts = summary.get(f"{mc}_counts", {})
+            st.write(
+                f"**{mc}** — yes: {counts.get('yes', 0):,} | "
+                f"no: {counts.get('no', 0):,} | "
+                f"not found: {counts.get('not found', 0):,}"
+            )
+
+        st.markdown("### Output preview (first 50 rows)")
+        st.dataframe(result_df.head(50), use_container_width=True)
+
+        now = datetime.now(tz) if tz else datetime.now()
+        date_prefix = now.strftime("%Y_%m_%d")
+        out_filename = f"{date_prefix} metadata_comparison_output.csv"
+        out_path = os.path.join(APP_DIR, out_filename)
+
+        try:
+            result_df.to_csv(out_path, index=False, encoding="utf-8")
+            st.info(f"Saved to app folder: `{out_path}`")
+        except Exception as e:
+            st.error(f"Could not save file to app folder: {e}")
+
+        out_buf = io.BytesIO()
+        result_df.to_csv(out_buf, index=False)
+        st.download_button(
+            f"Download {out_filename}",
+            data=out_buf.getvalue(),
+            file_name=out_filename,
+            mime="text/csv",
+        )
+
+    except Exception as e:
+        st.error(f"Comparison failed: {e}")
 
 # ---------------------------
 # Export tab
@@ -1225,10 +1333,13 @@ def ui_playlist_creator_tab(cfg: AppConfig):
         )
     with r4:
         allow_unrated = st.checkbox(
-            "Allow tracks with no rating",
+            "Allow unrated items (Track/Album/Artist)",
             value=st.session_state.get("pc_allow_unrated", True),
             key="pc_allow_unrated",
-            help="If checked, tracks/albums/artists with userRating = None are allowed even when minimums are set.",
+            help=(
+                "If checked, items with NO rating are allowed to pass, even if you set a minimum. "
+                "If unchecked, an unrated Album or Artist will block the track if a minimum is set for that level."
+            ),
         )
 
     st.markdown("### Play count filters")
@@ -1656,6 +1767,7 @@ def ui_playlist_creator_tab(cfg: AppConfig):
 # ---------------------------
 # Compare tab
 # ---------------------------
+
 def ui_compare_tab():
     from datetime import datetime
     try:
@@ -1666,10 +1778,8 @@ def ui_compare_tab():
 
     st.subheader("Compare Exported Metadata")
     st.caption(
-        "Upload an **old** and **new** export CSV. Tracks are matched by: "
-        "**Album_Artist + Album + Disc # + Track #**. "
-        "Outputs a CSV based on **new** with *_Match columns (yes/no/not found). "
-        "Optionally include Old/Lost/Gained detail columns."
+        "Upload an **old** and **new** export CSV. \n"
+        "Matches rows by **Track_ID / RatingKey** (preferred) or **Artist+Album+Track** (fallback)."
     )
 
     col1, col2 = st.columns(2)
@@ -1697,22 +1807,30 @@ def ui_compare_tab():
 
     st.divider()
 
-    missing_old = [c for c in KEY_COLS_POSITION if c not in old_df.columns]
-    missing_new = [c for c in KEY_COLS_POSITION if c not in new_df.columns]
-    if missing_old or missing_new:
-        st.error(
-            f"Missing key columns needed for matching.\n\n"
-            f"- Missing in OLD: {missing_old}\n"
-            f"- Missing in NEW: {missing_new}\n\n"
-            f"Expected columns: {KEY_COLS_POSITION}"
-        )
-        return
+    # --- DYNAMIC COLUMN SELECTOR (CHECKLIST STYLE) ---
+    # 1. Find columns that exist in BOTH files
+    common_cols = [c for c in old_df.columns if c in new_df.columns]
+    
+    # 2. Exclude the ID columns from being compared against themselves (optional, but cleaner)
+    ignored_keys = ["_key", "Track_ID", "RatingKey"]
+    selectable_cols = [c for c in common_cols if c not in ignored_keys]
 
-    st.write("Comparison variables:")
-    st.code("\n".join(COMPARE_VARS), language="text")
+    st.markdown("### Select Columns to Compare")
+    st.caption("Check the variables you want to include in the comparison report.")
+
+    # --- Vertical Checklist Loop ---
+    selected_vars = []
+    
+    for col_name in selectable_cols:
+        # Start unchecked
+        if st.checkbox(col_name, value=False, key=f"compare_chk_{col_name}"):
+            selected_vars.append(col_name)
+    # ------------------------------------
+
+    st.divider()
 
     include_details = st.checkbox(
-        "Include details (Old/Lost/Gained columns for collections & playlists)",
+        "Include details (Old/Lost/Gained columns)",
         value=False,
         key="compare_details"
     )
@@ -1720,10 +1838,19 @@ def ui_compare_tab():
     run = st.button("Run comparison", type="primary", key="compare_run")
     if not run:
         return
+        
+    if not selected_vars:
+        st.error("Please select at least one column to compare.")
+        return
 
     try:
-        result_df, summary = compare_exports_add_match_cols(old_df, new_df, include_details=include_details)
-        st.success("Comparison complete.")
+        # Pass YOUR selected variables to the function
+        result_df, summary = compare_exports_add_match_cols(
+            old_df, new_df, 
+            compare_vars=selected_vars, 
+            include_details=include_details
+        )
+        st.success(f"Comparison complete using: **{summary.get('match_method', 'Unknown')}**")
 
         st.markdown("### Summary")
         m1, m2, m3, m4 = st.columns(4)
@@ -1732,14 +1859,8 @@ def ui_compare_tab():
         m3.metric("Matched keys", summary["matched_keys"])
         m4.metric("Unmatched NEW keys", summary["unmatched_new_keys"])
 
-        if summary["old_duplicate_keys"] or summary["new_duplicate_keys"]:
-            st.warning(
-                f"Duplicate match keys detected (OLD={summary['old_duplicate_keys']}, NEW={summary['new_duplicate_keys']}). "
-                "For duplicates, the comparison uses the *first* occurrence per key."
-            )
-
         st.markdown("### Match breakdown")
-        for c in COMPARE_VARS:
+        for c in selected_vars:
             mc = f"{c}_Match"
             counts = summary.get(f"{mc}_counts", {})
             st.write(
