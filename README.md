@@ -4,7 +4,7 @@ A powerful **Streamlit** application running on Unraid (or locally) to organize,
 
 **Key Features:**
 * **Export Metadata:** Dump your entire library (Tracks, Albums, Artists) to CSV.
-* **Smart Playlist Creator:** Generate "Sonic" playlists using Plex's sonic analysis, listening history, and custom seeds (e.g., "Deep Dive into Jazz" or "Morning Mix").
+* **Smart Playlist Creator:** Generate "Sonic" playlists using Plex's sonic analysis, listening history, and custom seeds (e.g., "Jazz Mix" or "Radiohead Radio").
 * **Bulk Editor:** Update metadata via CSV (Genres, Ratings, Dates, Collections) using single or chained scripts.
 * **Metadata Comparator:** Compare two export files to see exactly what changed in your library over time.
 * **Docker/Unraid Ready:** Designed to run as a container with environment variables.
