@@ -75,9 +75,39 @@ The Export module allows you to extract metadata from your Plex library into CSV
     * Artists: Exports artist-level data (e.g., album lists for each artist, track counts, collection information, total file size).
 * Output: Generates timestamped CSV files in the Exports folder. These files serve as the template for the Update modules.
 
+## 4. Update from CSV (Single Script)
 
+This tool allows you to mass-edit your Plex metadata by uploading a modified CSV file. It is an efficient way to perform bulk changes (e.g., re-tagging genres, manually setting ratings, or fixing track titles).
 
+Workflow:
+1.	Export: First export track details from the Export tab. This provides a detailed CSV file of your music library at three levels of granularity:
+* track (“YY_MM_DD Track_Level_Info.csv”)
+* album (“YY_MM_DD Artist_Album_Info.csv”)
+* artist (“YY_MM_DD Artist_Level_Info.csv”)
+2.	Edit: Make your edits to the track level csv, this is the file you will upload. Tip: Just copy the rows you are editing to a new file. Remember to include the file header row.
+3.	Variable Mapping: The tool matches rows to your Plex content using unique track IDs (ratingKey). The tool is looking for specific variable names based on the specific action you choose. Check out the Expected CSV schema & values dropdown box for information for each action type.
+4.	Choose an Action for Your Update: Select your action from the Choose an action list.
+5.	Upload csv with your edits: Either drag and drop or look up your file on the Drag and drop file here button.
+6.	Confirm action: Type CONFIRM to sign off on your submission. Warning: Edits to metadata in plex can cause hard-to-fix errors or even corrupt your database. Make sure to make a backup of your data first and complete small test runs (3-5 tracks) before committing an action. 
+7.	Run: Commits the changes to your Plex Media Server.
 
+Notes: 
+* Editing track genres is computationally taxing because each track’s genre metadata must be ‘locked’ after updating. Be mindful when using this action and check computation times with small batches (50 tracks or less) before committing to a longer run. 
+* Editing artist titles is not possible via the API. This must be manually changed in the Plex app. 
+
+5. Update from CSV (Multiple Scripts)
+
+This tool works like the Update from CSV (Single Script), but it allows for multiple scripts to run one after another. For example, you can edit an artists’ genre, album genre, and track genre information in one run. The same rules for variable mapping apply  for each action. See section 2. Update from CSV (Single Script) for more details.
+
+6. Compare Exported Metadata
+
+This analysis tool takes two export files (e.g., "Export_Jan_01.csv" and "Export_Feb_01.csv") and highlights the differences.
+
+•	Purpose:
+•	Track how your library has changed across time.
+•	Verify that a bulk update script worked correctly.
+•	Identify accidental metadata changes or lost ratings.
+•	Output: Features a dynamic column selector allowing you to choose exactly which variables to check (e.g., Bitrate, Mood, Rating). Generates a detailed report of differences side-by-side.
 
 
 ## Features in Detail
