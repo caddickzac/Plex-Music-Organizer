@@ -11,19 +11,9 @@ A powerful **Streamlit** application running on Unraid (or locally) to organize,
 
 ---
 
-## Installation
+## 1. Installation
 
-### Option A: Unraid (Docker)
-1.  **Install from App Store (coming soon):** Search for "Plex Music Organizer" (once published) or add the container manually.
-2.  **Configure Environment Variables:**
-    * `PLEX_URL`: Your local server address (e.g., `http://192.168.1.50:32400`).
-    * `PLEX_TOKEN`: Your X-Plex-Token.
-    * `PLEX_LIBRARY_NAME`: The exact name of your music library (Default: `Music`).
-3.  **Map Volumes:**
-    * `/app/config.txt`: (Optional) Map if you prefer file-based config.
-    * `/app/Exports`: **Crucial.** Map this to a share (e.g., `/mnt/user/appdata/plex-organizer/Exports`) to access your CSV dumps.
-
-### Option B: Local (Python)
+### 1.1 Local Installation
 1.  **Clone the Repo:**
     ```bash
     git clone https://github.com/caddickzac/Plex-Music-Organizer.git
@@ -38,9 +28,21 @@ A powerful **Streamlit** application running on Unraid (or locally) to organize,
     streamlit run Plex_Streamlit_App.py
     ```
 
+### 1.2 Unraid (Docker)
+1.  **Install from App Store (coming soon):** Search for "Plex Music Organizer" (once published) or add the container manually.
+2.  **Configure Environment Variables:**
+    * `PLEX_URL`: Your local server address (e.g., `http://192.168.1.50:32400`).
+    * `PLEX_TOKEN`: Your X-Plex-Token.
+    * `PLEX_LIBRARY_NAME`: The exact name of your music library (Default: `Music`).
+3.  **Map Volumes:**
+    * `/app/config.txt`: (Optional) Map if you prefer file-based config.
+    * `/app/Exports`: **Crucial.** Map this to a share (e.g., `/mnt/user/appdata/plex-organizer/Exports`) to access your CSV dumps.
+
+
 ---
 
-## ⚙️ Configuration
+
+## 2 Configuration
 
 ### Method 1: Environment Variables (Recommended for Docker)
 The app prioritizes these variables if they exist.
