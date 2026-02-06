@@ -12,35 +12,63 @@ A powerful **Streamlit** application running on Unraid (or locally) to organize,
 ---
 
 ## Table of Contents
-Table of Contents
+
 Plex Music Library Organizer
+
 1.	Installation
+
 1.1  Local Installation
+  	
 1.2  Unraid Version
+
 1.3	Docker Version
-2.	Configuration
+  	
+3.	Configuration
+
 2.1  Local Configuration
+  	
 2.2  Unraid Version
+  	
 3.	Export
+
 4.	Update from CSV (Single Script)
+
 5.	Update from CSV (Multiple Scripts)
+
 6.	Compare Exported Metadata
+
 7.	Playlist Creator
+
 7.1  Seed Strategy
+  	
 7.2  Seed Sources
+
 7.3  Presets
+  	
 7.4  Custom Naming
+
 7.5  Playlist parameters
+  	
 7.6  Rating filters
+  	
 7.7  Play count filters
+  	
 7.8  Year & duration filters (album-based year)
+  	
 7.9  Date Added Bias
+  	
 7.10  Artist / album caps
+  	
 7.11  History filters (for history-based seeds & fallbacks)
+  	
 7.12  Genre & collections filters
+  	
 8. Automation & Scheduling (Unraid)
+ 
 8.1 Setting up a User Script
+   
 8.2 Scheduling (Cron Syntax)
+   
 9. Safety & Troubleshooting
 
 
