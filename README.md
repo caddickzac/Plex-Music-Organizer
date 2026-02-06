@@ -11,6 +11,39 @@ A powerful **Streamlit** application running on Unraid (or locally) to organize,
 
 ---
 
+## Table of Contents
+Table of Contents
+Plex Music Library Organizer
+1.	Installation
+1.1  Local Installation
+1.2  Unraid Version
+1.3	Docker Version
+2.	Configuration
+2.1  Local Configuration
+2.2  Unraid Version
+3.	Export
+4.	Update from CSV (Single Script)
+5.	Update from CSV (Multiple Scripts)
+6.	Compare Exported Metadata
+7.	Playlist Creator
+7.1  Seed Strategy
+7.2  Seed Sources
+7.3  Presets
+7.4  Custom Naming
+7.5  Playlist parameters
+7.6  Rating filters
+7.7  Play count filters
+7.8  Year & duration filters (album-based year)
+7.9  Date Added Bias
+7.10  Artist / album caps
+7.11  History filters (for history-based seeds & fallbacks)
+7.12  Genre & collections filters
+8. Automation & Scheduling (Unraid)
+8.1 Setting up a User Script
+8.2 Scheduling (Cron Syntax)
+9. Safety & Troubleshooting
+
+
 ## 1. Installation
 
 ### 1.1 Local Installation
@@ -74,6 +107,9 @@ The Export module allows you to extract metadata from your Plex library into CSV
     * Albums: Exports album-level data (e.g., album title, year, track counts, average bitrate).
     * Artists: Exports artist-level data (e.g., album lists for each artist, track counts, collection information, total file size).
 * Output: Generates timestamped CSV files in the Exports folder. These files serve as the template for the Update modules.
+
+Note: See the Plex_Organizer_Data_Dictionary file for descriptions of the exported metadata fields.
+
 
 ## 4. Update from CSV (Single Script)
 
@@ -638,21 +674,11 @@ Breakdown:
 * "Sonic Analysis" Error: If the Playlist Creator fails, ensure you have enabled "Sonic Analysis" in your Plex Library settings and that the scheduled task has completed processing your music.
 * Bulk Edits: Writes to Plex are potentially destructive. Always Export a backup CSV before running a bulk update script.
 
-## Screenshots of App
+
+## 10 Screenshots of App
 ![View 1](App%20Screenshots/View%201.png?raw=true)
 
 ![View 2](App%20Screenshots/View%202.png?raw=true)
 
 ![View 3](App%20Screenshots/View%203.png?raw=true)
-
-## Exported File Data Dictionary 
-See the **Plex_Organizer_Data_Dictionary** file for descriptions of the exported metadata fields.
-
-## Troubleshooting
-- Error: “Must include items to add when creating new playlist.”
-Your CSV produced no valid track objects. Check:
-  - Track_ID values are integers and exist on your server.
-  - The playlist column is named exactly as expected (e.g., Add_to_playlist).
-  - Multiple names are comma-separated (no semicolons or pipes).
-- Note: Bulk writes can be destructive. Always export first. Test with 3–5 rows before running a big CSV.
 
