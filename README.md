@@ -70,9 +70,9 @@ The app needs these variable:
 The Export module allows you to extract metadata from your Plex library into CSV files. This is useful for backing up your library data, analyzing your listening habits in Excel, or preparing data for mass updates.
 * Functionality: Connects to your Plex server and scans the selected music library.
 * Export Levels:
-** Tracks: Exports individual song data (e.g., title, rating, play count, skip count, date added, playlist/collection information).
-** Albums: Exports album-level data (e.g., album title, year, track counts, average bitrate).
-** Artists: Exports artist-level data (e.g., album lists for each artist, track counts, collection information, total file size).
+    * Tracks: Exports individual song data (e.g., title, rating, play count, skip count, date added, playlist/collection information).
+    * Albums: Exports album-level data (e.g., album title, year, track counts, average bitrate).
+    * Artists: Exports artist-level data (e.g., album lists for each artist, track counts, collection information, total file size).
 * Output: Generates timestamped CSV files in the Exports folder. These files serve as the template for the Update modules.
 
 
