@@ -44,20 +44,31 @@ A powerful **Streamlit** application running on Unraid (or locally) to organize,
 
 ## 2 Configuration
 
-### Method 1: Environment Variables (Recommended for Docker)
-The app prioritizes these variables if they exist.
-* `PLEX_URL`
-* `PLEX_TOKEN`
-* `PLEX_LIBRARY_NAME` (e.g., "Music", "HiFi", "FLAC")
+### 2.1  Local Configuration
 
-### Method 2: `config.txt` (Recommended for Local)
-Create a file named `config.txt` in the root folder. **Add this file to your `.gitignore` to keep your token safe!**
+Create a file named config.txt in the root folder. 
 
 ```text
-Plex URL: [http://192.168.1.50:32400](http://192.168.1.50:32400)
+Plex URL: e.g., http://192.168.1.50:32400
 Plex Token: abcXYZ123token
 Plex Library: Music
 ```
+
+Note: Add the txt file to your .gitignore to keep your token safe!
+
+### 2.2  Unraid Version
+
+Edit Environment Variables in Unraid Docker App.
+
+The app needs these variable:
+•	PLEX_URL
+•	PLEX_TOKEN
+•	PLEX_LIBRARY_NAME (e.g., "Music", "HiFi", "FLAC")
+
+
+
+
+
 
 ## Features in Detail
 1. Playlist Creator (Sonic & History)
