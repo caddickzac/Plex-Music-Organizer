@@ -127,7 +127,7 @@ Plex Library: Music
 
 Note: Add the txt file to your .gitignore to keep your token safe!
 
-### 2.2  Unraid Version
+### 2.2  Unraid & Docker
 
 Edit Environment Variables in Unraid Docker App.
 
