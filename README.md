@@ -100,7 +100,17 @@ Plex Music Library Organizer
     * `/app/Exports`: **Crucial.** Map this to a share (e.g., `/mnt/user/appdata/plex-organizer/Exports`) to access your CSV dumps.
 
 
----
+### 1.3 Docker Installation
+
+The latest stable image is available on Docker Hub.
+You can pull it directly using the following command:
+
+```
+docker pull caddickzac/musicprocessor:latest
+
+```
+
+
 
 
 ## 2 Configuration
