@@ -21,13 +21,13 @@ Plex Music Library Organizer
   	
 1.2  Unraid Version
 
-1.3	Docker Version
+1.3	 Docker Version
   	
 3.	Configuration
 
 2.1  Local Configuration
   	
-2.2  Unraid Version
+2.2  Unraid & Docker Configuration
   	
 3.	Export
 
@@ -127,7 +127,7 @@ Plex Library: Music
 
 Note: Add the txt file to your .gitignore to keep your token safe!
 
-### 2.2  Unraid & Docker
+### 2.2  Unraid & Docker Configuration
 
 Edit Environment Variables in Unraid Docker App.
 
