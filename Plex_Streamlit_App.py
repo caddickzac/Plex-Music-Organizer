@@ -208,7 +208,8 @@ def discover_scripts(include_exports: bool = True, _sig: str = "") -> Dict[str, 
 # ---------------------------
 # Export via external script
 # ---------------------------
-def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
+
+def export_library_metadata_via_script(cfg: AppConfig, limit: int = 0, include_playlists: bool = True, include_sonic: bool = False) -> pd.DataFrame:
     """Run external export script and load the resulting CSV."""
     if not (cfg.plex_baseurl and cfg.plex_token):
         raise RuntimeError("Missing Plex URL or Token.")
@@ -227,6 +228,13 @@ def export_library_metadata_via_script(cfg: AppConfig) -> pd.DataFrame:
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1",
     })
+
+    # --- Pass Variables to Script ---
+    if limit > 0:
+        env["EXPORT_LIMIT"] = str(limit)
+    
+    # Pass booleans as "1" (True) or "0" (False)
+    env["EXPORT_PLAYLISTS"] = "1" if include_playlists else "0"
 
     log_box = st.empty()
     log_lines: List[str] = []
@@ -684,14 +692,35 @@ def ui_compare_tab():
 # ---------------------------
 # Export tab
 # ---------------------------
+
+# ---------------------------
+# Export tab
+# ---------------------------
+
 def ui_export_tab(cfg: AppConfig):
     st.subheader("Export current metadata → CSV")
     if not (cfg.plex_baseurl and cfg.plex_token):
         st.info("Enter URL and Token in the left panel to enable export.")
         return
+
+    # --- Options Checkboxes ---
+    opt_playlists = st.checkbox(
+        "Map Playlists", 
+        value=True, 
+        help="Scans every playlist to match tracks. Uncheck this to significantly speed up export."
+    )
+    st.divider()
+
+    # --- Main Export ---
+    # FIX: Changed label to static string, removed reference to undefined 'limit_val'
     if st.button("Export all track details", type="primary"):
         try:
-            df = export_library_metadata_via_script(cfg)
+            # Pass the checkboxes to the function
+            df = export_library_metadata_via_script(
+                cfg, 
+                limit=0, 
+                include_playlists=opt_playlists
+            )
             st.success(f"Exported {len(df):,} tracks.")
             st.dataframe(df.head(50), use_container_width=True)
             out = io.BytesIO()
@@ -704,6 +733,43 @@ def ui_export_tab(cfg: AppConfig):
             )
         except Exception as e:
             st.error(f"Export failed: {e}")
+
+    # --- Test Export ---
+    st.divider()
+    st.markdown("### Test Export")
+    st.caption("Export a limited number of tracks from your library.")
+
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        # limit_val is defined HERE, so it can only be used below this line
+        limit_val = st.number_input("Max Tracks", min_value=1, value=50, step=10)
+    
+    with col2:
+        st.write("") 
+        st.write("") 
+        if st.button(f"Export first {limit_val} tracks"):
+            try:
+                # Pass the checkboxes here too
+                df = export_library_metadata_via_script(
+                    cfg, 
+                    limit=limit_val,
+                    include_playlists=opt_playlists
+                )
+                
+                st.success(f"Test complete: Exported {len(df):,} tracks.")
+                st.dataframe(df.head(50), use_container_width=True)
+                
+                out = io.BytesIO()
+                df.to_csv(out, index=False)
+                st.download_button(
+                    f"Download Test Export ({limit_val})",
+                    data=out.getvalue(),
+                    file_name=f"Test_Export_{limit_val}_Tracks.csv",
+                    mime="text/csv",
+                )
+            except Exception as e:
+                st.error(f"Test export failed: {e}")
 
 # ---------------------------
 # Update single-script tab
