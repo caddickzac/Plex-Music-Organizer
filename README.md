@@ -1,4 +1,4 @@
-# Plex Music Library Organizer
+# Music Manager for Plex
 
 A powerful **Streamlit** application running on Unraid (or locally) to organize, automate, and curate your Plex Music library.
 
@@ -13,7 +13,7 @@ A powerful **Streamlit** application running on Unraid (or locally) to organize,
 
 ## Table of Contents
 
-Plex Music Library Organizer
+Music Manager for Plex
 
 1.	Installation
 
@@ -77,7 +77,7 @@ Plex Music Library Organizer
 ### 1.1 Local Installation
 1.  **Clone the Repo:**
     ```bash
-    git clone https://github.com/caddickzac/Plex-Music-Organizer.git
+    git clone https://github.com/caddickzac/Music-Manager-for-Plex.git
     cd Plex-Music-Organizer
     ```
 2.  **Install Dependencies:**
@@ -90,7 +90,7 @@ Plex Music Library Organizer
     ```
 
 ### 1.2 Unraid (Docker)
-1.  **Install from App Store (coming soon):** Search for "Plex Music Organizer" (once published) or add the container manually.
+1.  **Install from App Store (coming soon):** Search for "Music Manager for Plex" (once published) or add the container manually.
 2.  **Configure Environment Variables:**
     * `PLEX_URL`: Your local server address (e.g., `http://192.168.1.50:32400`).
     * `PLEX_TOKEN`: Your X-Plex-Token.
