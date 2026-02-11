@@ -78,7 +78,7 @@ Music Manager for Plex
 1.  **Clone the Repo:**
     ```bash
     git clone https://github.com/caddickzac/Music-Manager-for-Plex.git
-    cd Plex-Music-Organizer
+    cd path/to/Music-Manager-for-Plex
     ```
 2.  **Install Dependencies:**
     ```bash
@@ -86,7 +86,7 @@ Music Manager for Plex
     ```
 3.  **Run the App:**
     ```bash
-    streamlit run Plex_Streamlit_App.py
+    streamlit run Music-Manager-for-Plex-App.py
     ```
 
 ### 1.2 Unraid (Docker)
@@ -97,7 +97,7 @@ Music Manager for Plex
     * `PLEX_LIBRARY_NAME`: The exact name of your music library (Default: `Music`).
 3.  **Map Volumes:**
     * `/app/config.txt`: (Optional) Map if you prefer file-based config.
-    * `/app/Exports`: **Crucial.** Map this to a share (e.g., `/mnt/user/appdata/plex-organizer/Exports`) to access your CSV dumps.
+    * `/app/Exports`: **Crucial.** Map this to a share (e.g., `/mnt/user/appdata/music-manager-for-plex/Exports`) to access your CSV dumps.
 
 
 ### 1.3 Docker Installation
@@ -106,7 +106,7 @@ The latest stable image is available on Docker Hub.
 You can pull it directly using the following command:
 
 ```
-docker pull zcaddick/plex-music-organizer:latest
+docker pull zcaddick/music-manager-for-plex:latest
 
 ```
 
@@ -146,7 +146,7 @@ The Export module allows you to extract metadata from your Plex library into CSV
     * Artists: Exports artist-level data (e.g., album lists for each artist, track counts, collection information, total file size).
 * Output: Generates timestamped CSV files in the Exports folder. These files serve as the template for the Update modules.
 
-Note: See the Plex_Organizer_Data_Dictionary file for descriptions of the exported metadata fields.
+Note: See the Music_Manager_Track_Level_Data_Dictionary file for descriptions of the exported metadata fields.
 
 
 ## 4. Update from CSV (Single Script)
@@ -373,7 +373,7 @@ Key Takeaway
 
 #### 7.2.1  Seed track ratingKeys (comma-separated)
 
-To use specific tracks as inputs to generating your playlist enter one or more comma-separated Track ID (ratingKeys; e.g., 12345). To find a Track ID use the Export module in Plex Music Library Organizer and look for the “Track_ID” variable in the track level CSV file. Additionally, you can find this information within Plex by clicking the three dots on a track, selecting “Get Info”, then selecting “View XML” from the pop-up window. In the window that appears find “Track ratingKey=” and grab the specific ID number for that track. 
+To use specific tracks as inputs to generating your playlist enter one or more comma-separated Track ID (ratingKeys; e.g., 12345). To find a Track ID use the Export module in the tool and look for the “Track_ID” variable in the track level CSV file. Additionally, you can find this information within Plex by clicking the three dots on a track, selecting “Get Info”, then selecting “View XML” from the pop-up window. In the window that appears find “Track ratingKey=” and grab the specific ID number for that track. 
 
 How is this affected by Seed Strategy choice?
 * Works on: Sonic Tracks Mix, Sonic Journey, Sonic Combo, Sonic Album Mix, Sonic Artist Mix, Deep Dive, and History + Seeds.
@@ -670,7 +670,7 @@ For Unraid users, the recommended method is using the User Scripts plugin.
 
 ## 8.1 Setting up a User Script
 1.	Prerequisite: Install the User Scripts plugin via the Unraid Apps tab.
-2.	Create a Preset: Ensure you have saved your desired settings as a Preset inside the Plex Music Library Organizer web interface (e.g., "Indie Mix").
+2.	Create a Preset: Ensure you have saved your desired settings as a Preset inside the Music Manager for Plex web interface (e.g., "Indie Mix").
 3.	Add New Script:
     * Go to Settings > User Scripts.
     * Click "Add New Script".
@@ -681,9 +681,9 @@ For Unraid users, the recommended method is using the User Scripts plugin.
 #!/bin/bash
 # Run the Playlist Creator inside the Docker container using a saved preset
 # Replace "Indie Mix" with your exact Preset Name (keep the quotes)
-# Replace "plex-music-library-organizer" if your docker container is named differently
+# Replace "music-manager-for-plex" if your docker container is named differently
 
-docker exec plex-music-library-organizer python /app/Scripts/playlist_creator.py --preset "Indie Mix"
+docker exec music-manager-for-plex python /app/Scripts/playlist_creator.py --preset "Indie Mix"
 ```
 5.  Save Changes.
 
