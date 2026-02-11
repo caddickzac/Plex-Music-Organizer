@@ -23,7 +23,7 @@ Music Manager for Plex
 
 1.3	 Docker Version
   	
-3.	Configuration
+2.	Configuration
 
 2.1  Local Configuration
   	
