@@ -106,7 +106,7 @@ The latest stable image is available on Docker Hub.
 You can pull it directly using the following command:
 
 ```
-docker pull caddickzac/musicprocessor:latest
+docker pull zcaddick/plex-music-organizer:latest
 
 ```
 
