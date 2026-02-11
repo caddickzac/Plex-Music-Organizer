@@ -1,6 +1,6 @@
 # Music Manager for Plex
 
-A powerful **Streamlit** application running on DOcker, Locally, or Unraid (soon) to organize, automate, and curate your Plex Music library.
+A powerful **Streamlit** application running on Docker, Locally, or Unraid (soon) to organize, automate, and curate your Plex Music library.
 
 **Key Features:**
 * **Export Metadata:** Dump your entire library (Tracks, Albums, Artists) to CSV.
