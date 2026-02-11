@@ -71,6 +71,8 @@ Music Manager for Plex
    
 9. Safety & Troubleshooting
 
+10. Screenshots of App
+
 
 ## 1. Installation
 
