@@ -14,9 +14,9 @@ import pandas as pd
 from plexapi.server import PlexServer  # type: ignore
 
 # --- Version Configuration ---
-CURRENT_VERSION = "v1.0.1"
+CURRENT_VERSION = "v1.1.1"
 REPO_OWNER = "caddickzac"
-REPO_NAME = "Plex-Music-Organizer"
+REPO_NAME = "Music-Manager-for-Plex"
 
 @st.cache_data(ttl=10800)  # Check every 4 hours
 def check_github_updates():
@@ -32,7 +32,7 @@ def check_github_updates():
         pass # Fail silently if no internet or API limit hit
     return None, None
 
-APP_TITLE = "Plex Music Library Organizer"
+APP_TITLE = "Music Manager for Plex"
 APP_DIR = os.getcwd()
 SCRIPTS_DIR = os.path.join(APP_DIR, "Scripts")
 # Define the Exports directory
@@ -43,7 +43,7 @@ PLAYLIST_CREATOR_SCRIPT = os.path.join(SCRIPTS_DIR, "playlist_creator.py")
 # NEW: where playlist presets will live
 PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
 
-st.set_page_config(page_title="Plex Music Library — Organizer", page_icon="🎵", layout="wide")
+st.set_page_config(page_title="Music Manager for Plex", page_icon="🎵", layout="wide")
 
 
 # ---------------------------
