@@ -9,7 +9,7 @@ A powerful **Streamlit** application running on Docker, locally on a PC, or Unra
 * **Metadata Comparator:** Compare two export files to see exactly what changed in your library over time.
 * **Docker/Unraid Ready:** Designed to run as a container with environment variables.
 
----
+
 
 ## Screenshots of App
 ![View 1](App%20Screenshots/View%201.png?raw=true)
@@ -18,7 +18,7 @@ A powerful **Streamlit** application running on Docker, locally on a PC, or Unra
 
 ![View 3](App%20Screenshots/View%203.png?raw=true)
 
----
+
 
 
 ## Table of Contents
@@ -81,7 +81,7 @@ Music Manager for Plex
    
 9. Safety & Troubleshooting
 
----
+
 
 ## 1. Installation
 
