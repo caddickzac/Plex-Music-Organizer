@@ -15,7 +15,7 @@ import pandas as pd
 from plexapi.server import PlexServer  # type: ignore
 
 # --- Version Configuration ---
-CURRENT_VERSION = "v1.1.3"
+CURRENT_VERSION = "v1.1.4"
 REPO_OWNER = "caddickzac"
 REPO_NAME = "Music-Manager-for-Plex"
 
@@ -47,7 +47,12 @@ PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
 # Define the source (inside the immutable Docker image)
 # and destination (the mapped folder on the user's hard drive)
 INTERNAL_SCRIPTS = "/app/Scripts"
-INTERNAL_DOCS = ["/app/App Documentation.pdf", "/app/Music_Manager_Track_Level_Data_Dictionary.csv"]
+# 1. DEFINE THE FILES FIRST
+INTERNAL_FILES = {
+    "/app/Scripts/playlist_creator.py": "Scripts",
+    "/app/App Documentation.pdf": None,
+    "/app/Music_Manager_Track_Level_Data_Dictionary.csv": None
+}
 EXTERNAL_EXTRAS_PATH = "/app/Extras"
 
 # Ensure the main Extras folder exists
