@@ -11,6 +11,16 @@ A powerful **Streamlit** application running on Docker, locally on a PC, or Unra
 
 ---
 
+## Screenshots of App
+![View 1](App%20Screenshots/View%201.png?raw=true)
+
+![View 2](App%20Screenshots/View%202.png?raw=true)
+
+![View 3](App%20Screenshots/View%203.png?raw=true)
+
+---
+
+
 ## Table of Contents
 
 Music Manager for Plex
@@ -71,8 +81,7 @@ Music Manager for Plex
    
 9. Safety & Troubleshooting
 
-10. Screenshots of App
-
+---
 
 ## 1. Installation
 
@@ -713,12 +722,4 @@ Breakdown:
 * Token Security: Never commit your config.txt to GitHub.
 * "Sonic Analysis" Error: If the Playlist Creator fails, ensure you have enabled "Sonic Analysis" in your Plex Library settings and that the scheduled task has completed processing your music.
 * Bulk Edits: Writes to Plex are potentially destructive. Always Export a backup CSV before running a bulk update script.
-
-
-## 10 Screenshots of App
-![View 1](App%20Screenshots/View%201.png?raw=true)
-
-![View 2](App%20Screenshots/View%202.png?raw=true)
-
-![View 3](App%20Screenshots/View%203.png?raw=true)
 
