@@ -6,6 +6,7 @@ import json
 import hashlib
 import subprocess
 import requests
+import shutil
 from dataclasses import dataclass, field
 from typing import Dict, List
 from glob import glob
@@ -14,7 +15,7 @@ import pandas as pd
 from plexapi.server import PlexServer  # type: ignore
 
 # --- Version Configuration ---
-CURRENT_VERSION = "v1.1.2"
+CURRENT_VERSION = "v1.1.3"
 REPO_OWNER = "caddickzac"
 REPO_NAME = "Music-Manager-for-Plex"
 
@@ -43,7 +44,29 @@ PLAYLIST_CREATOR_SCRIPT = os.path.join(SCRIPTS_DIR, "playlist_creator.py")
 # NEW: where playlist presets will live
 PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
 
-st.set_page_config(page_title="Music Manager for Plex", page_icon="🎵", layout="wide")
+# Define the source (inside the immutable Docker image)
+# and destination (the mapped folder on the user's hard drive)
+INTERNAL_SCRIPTS = "/app/Scripts"
+INTERNAL_DOCS = ["/app/App Documentation.pdf", "/app/Music_Manager_Track_Level_Data_Dictionary.csv"]
+EXTERNAL_EXTRAS_PATH = "/app/Extras"
+
+# Copy logic (same as before, just using the new name)
+if not os.path.exists(EXTERNAL_EXTRAS_PATH):
+    os.makedirs(EXTERNAL_EXTRAS_PATH)
+
+# Copy the specific files you want users to have
+files_to_expose = [
+    "/app/Scripts/playlist_creator.py",
+    "/app/App Documentation.pdf",
+    "/app/Music_Manager_Track_Level_Data_Dictionary.csv"
+]
+
+for internal_file in files_to_expose:
+    filename = os.path.basename(internal_file)
+    dest = os.path.join(EXTERNAL_EXTRAS_PATH, filename)
+    # Only copy if it doesn't exist (so we don't overwrite user edits)
+    if not os.path.exists(dest):
+        shutil.copy(internal_file, dest)
 
 
 # ---------------------------
