@@ -44,9 +44,6 @@ PLAYLIST_CREATOR_SCRIPT = os.path.join(SCRIPTS_DIR, "playlist_creator.py")
 # NEW: where playlist presets will live
 PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
 
-# Define the source (inside the immutable Docker image)
-# and destination (the mapped folder on the user's hard drive)
-INTERNAL_SCRIPTS = "/app/Scripts"
 # 1. DEFINE THE FILES FIRST
 INTERNAL_FILES = {
     "/app/Scripts/playlist_creator.py": "Scripts",
@@ -2014,6 +2011,8 @@ def ui_compare_tab():
 # Main
 # ---------------------------
 def main():
+    st.set_page_config(layout="wide", page_title=APP_TITLE)
+
     # 1. Check for the password variable
     # If this is None or empty, we assume we are in "Trusted/Local" mode
     app_password = os.getenv("APP_PASSWORD")
