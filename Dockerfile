@@ -23,4 +23,4 @@ COPY . .
 # 4. Streamlit config
 EXPOSE 8501
 
-CMD ["streamlit", "run", "Plex_Streamlit_App.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "Music-Manager-for-Plex-App.py", "--server.port=8501", "--server.address=0.0.0.0"]

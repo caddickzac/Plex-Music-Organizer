@@ -14,7 +14,7 @@ import pandas as pd
 from plexapi.server import PlexServer  # type: ignore
 
 # --- Version Configuration ---
-CURRENT_VERSION = "v1.1.1"
+CURRENT_VERSION = "v1.1.2"
 REPO_OWNER = "caddickzac"
 REPO_NAME = "Music-Manager-for-Plex"
 
