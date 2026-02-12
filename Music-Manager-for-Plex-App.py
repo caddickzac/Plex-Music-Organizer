@@ -50,23 +50,44 @@ INTERNAL_SCRIPTS = "/app/Scripts"
 INTERNAL_DOCS = ["/app/App Documentation.pdf", "/app/Music_Manager_Track_Level_Data_Dictionary.csv"]
 EXTERNAL_EXTRAS_PATH = "/app/Extras"
 
-# Copy logic (same as before, just using the new name)
+# Ensure the main Extras folder exists
 if not os.path.exists(EXTERNAL_EXTRAS_PATH):
     os.makedirs(EXTERNAL_EXTRAS_PATH)
+    try:
+        os.chmod(EXTERNAL_EXTRAS_PATH, 0o777)
+    except:
+        pass
 
-# Copy the specific files you want users to have
-files_to_expose = [
-    "/app/Scripts/playlist_creator.py",
-    "/app/App Documentation.pdf",
-    "/app/Music_Manager_Track_Level_Data_Dictionary.csv"
-]
+for source_path, subfolder in INTERNAL_FILES.items():
+    if os.path.exists(source_path):
+        filename = os.path.basename(source_path)
+        
+        # Determine destination folder (Root or Subfolder)
+        if subfolder:
+            dest_dir = os.path.join(EXTERNAL_EXTRAS_PATH, subfolder)
+        else:
+            dest_dir = EXTERNAL_EXTRAS_PATH
+            
+        # Create subfolder if needed (e.g., Extras/Scripts)
+        if not os.path.exists(dest_dir):
+            os.makedirs(dest_dir)
+            try:
+                os.chmod(dest_dir, 0o777)
+            except:
+                pass
 
-for internal_file in files_to_expose:
-    filename = os.path.basename(internal_file)
-    dest = os.path.join(EXTERNAL_EXTRAS_PATH, filename)
-    # Only copy if it doesn't exist (so we don't overwrite user edits)
-    if not os.path.exists(dest):
-        shutil.copy(internal_file, dest)
+        # Define full destination path
+        dest_path = os.path.join(dest_dir, filename)
+
+        # Only copy if it doesn't exist (Preserve User Edits!)
+        if not os.path.exists(dest_path):
+            try:
+                shutil.copy(source_path, dest_path)
+                # CRITICAL: Make the file editable by Unraid users (chmod 777)
+                os.chmod(dest_path, 0o777)
+                print(f"Copied {filename} to {dest_dir}")
+            except Exception as e:
+                print(f"Error copying {filename}: {e}")
 
 
 # ---------------------------
