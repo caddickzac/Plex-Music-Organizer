@@ -696,9 +696,12 @@ For Unraid users, the recommended method is using the User Scripts plugin.
 #!/bin/bash
 # Run the Playlist Creator inside the Docker container using a saved preset
 # Replace "Indie Mix" with your exact Preset Name (keep the quotes)
-# Replace "music-manager-for-plex" if your docker container is named differently
+docker exec Music-Manager-for-Plex python /app/Extras/Scripts/playlist_creator.py --preset "Indie Mix"
 
-docker exec music-manager-for-plex python /app/Scripts/playlist_creator.py --preset "Indie Mix"
+# or to schedule regular metadata exports
+#!/bin/bash
+docker exec -e OUTPUT_CSV="/app/Exports/Track_Level_Info.csv" Music-Manager-for-Plex python /app/Extras/Scripts/export_library_metadata.py
+
 ```
 5.  Save Changes.
 
