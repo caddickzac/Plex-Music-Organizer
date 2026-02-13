@@ -36,15 +36,12 @@ def check_github_updates():
 APP_TITLE = "Music Manager for Plex"
 APP_DIR = os.getcwd()
 SCRIPTS_DIR = os.path.join(APP_DIR, "Scripts")
-# Define the Exports directory
 EXPORTS_DIR = os.path.join(APP_DIR, "Exports")
 CONFIG_TXT = os.path.join(APP_DIR, "config.txt")
 PLAYLIST_CREATOR_SCRIPT = os.path.join(SCRIPTS_DIR, "playlist_creator.py")
-
-# NEW: where playlist presets will live
 PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
 
-# 1. DEFINE THE FILES FIRST
+# 1. Define internal source files and external destination
 INTERNAL_FILES = {
     "/app/Scripts/playlist_creator.py": "Scripts",
     "/app/App Documentation.pdf": None,
@@ -52,71 +49,56 @@ INTERNAL_FILES = {
 }
 EXTERNAL_EXTRAS_PATH = "/app/Extras"
 
-# Ensure the main Extras folder exists
-if not os.path.exists(EXTERNAL_EXTRAS_PATH):
-    os.makedirs(EXTERNAL_EXTRAS_PATH)
-    try:
-        os.chmod(EXTERNAL_EXTRAS_PATH, 0o777)
-    except:
-        pass
-
-for source_path, subfolder in INTERNAL_FILES.items():
-    if os.path.exists(source_path):
-        filename = os.path.basename(source_path)
-        
-        # Determine destination folder (Root or Subfolder)
-        if subfolder:
-            dest_dir = os.path.join(EXTERNAL_EXTRAS_PATH, subfolder)
-        else:
-            dest_dir = EXTERNAL_EXTRAS_PATH
-            
-        # Create subfolder if needed (e.g., Extras/Scripts)
-        if not os.path.exists(dest_dir):
-            os.makedirs(dest_dir)
-            try:
-                os.chmod(dest_dir, 0o777)
-            except:
-                pass
-
-        # Define full destination path
-        dest_path = os.path.join(dest_dir, filename)
-
-        # Only copy if it doesn't exist (Preserve User Edits!)
-        if not os.path.exists(dest_path):
-            try:
-                shutil.copy(source_path, dest_path)
-                # CRITICAL: Make the file editable by Unraid users (chmod 777)
-                os.chmod(dest_path, 0o777)
-                print(f"Copied {filename} to {dest_dir}")
-            except Exception as e:
-                print(f"Error copying {filename}: {e}")
-
-FOLDERS_TO_UNLOCK = [
-    "/app/Exports",
-    "/app/Playlist_Presets",
-    "/app/Extras"
-]
+# 2. Define folders that need recursive permission syncing
+FOLDERS_TO_UNLOCK = [EXPORTS_DIR, PRESETS_DIR, EXTERNAL_EXTRAS_PATH]
 
 def apply_unraid_permissions():
-    """Forces 777 permissions on key directories to prevent SMB lockouts."""
+    """Forces 777 permissions recursively to prevent SMB/Unraid lockouts."""
     for folder in FOLDERS_TO_UNLOCK:
         if os.path.exists(folder):
             try:
-                # 0o777 gives Read/Write/Execute to Everyone
                 os.chmod(folder, 0o777)
-                
-                # Walk through subfolders and files to unlock them too
                 for root, dirs, files in os.walk(folder):
                     for d in dirs:
                         os.chmod(os.path.join(root, d), 0o777)
                     for f in files:
                         os.chmod(os.path.join(root, f), 0o777)
             except Exception as e:
-                print(f"Permission Sync Warning: {e}")
+                print(f"Permission Sync Warning for {folder}: {e}")
 
-# Run this before the Streamlit UI loads
+# 3. Handle File Exposure logic
+def expose_internal_files():
+    """Copies internal documentation and scripts to the mapped Extras folder."""
+    if not os.path.exists(EXTERNAL_EXTRAS_PATH):
+        try:
+            os.makedirs(EXTERNAL_EXTRAS_PATH)
+            os.chmod(EXTERNAL_EXTRAS_PATH, 0o777)
+        except:
+            pass
+
+    for source_path, subfolder in INTERNAL_FILES.items():
+        if os.path.exists(source_path):
+            filename = os.path.basename(source_path)
+            dest_dir = os.path.join(EXTERNAL_EXTRAS_PATH, subfolder) if subfolder else EXTERNAL_EXTRAS_PATH
+            
+            if not os.path.exists(dest_dir):
+                os.makedirs(dest_dir)
+                os.chmod(dest_dir, 0o777)
+
+            dest_path = os.path.join(dest_dir, filename)
+            
+            # Only copy if missing to preserve user modifications
+            if not os.path.exists(dest_path):
+                try:
+                    shutil.copy(source_path, dest_path)
+                    os.chmod(dest_path, 0o777)
+                    print(f"Successfully exposed {filename} to {dest_dir}")
+                except Exception as e:
+                    print(f"Error exposing {filename}: {e}")
+
+# Run setup logic before the UI loads
+expose_internal_files()
 apply_unraid_permissions()
-
 
 # ---------------------------
 # Config dataclass
