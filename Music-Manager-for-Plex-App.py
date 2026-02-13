@@ -44,6 +44,7 @@ PRESETS_DIR = os.path.join(APP_DIR, "Playlist_Presets")
 # 1. Define internal source files and external destination
 INTERNAL_FILES = {
     "/app/Scripts/playlist_creator.py": "Scripts",
+    "/app/Scripts/export_library_metadata.py": "Scripts",
     "/app/App Documentation.pdf": None,
     "/app/Music_Manager_Track_Level_Data_Dictionary.csv": None
 }
