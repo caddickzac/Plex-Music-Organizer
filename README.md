@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/caddickzac/Music-Manager-for-Plex/main/icon/icon.png" width="200" alt="Music Manager for Plex Icon">
+</p>
+
 # Music Manager for Plex
 
 A powerful **Streamlit** application running on Docker, locally on a PC, or Unraid (soon) to organize, automate, and curate your Plex Music library.
