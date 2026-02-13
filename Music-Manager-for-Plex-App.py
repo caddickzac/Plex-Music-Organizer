@@ -91,6 +91,32 @@ for source_path, subfolder in INTERNAL_FILES.items():
             except Exception as e:
                 print(f"Error copying {filename}: {e}")
 
+FOLDERS_TO_UNLOCK = [
+    "/app/Exports",
+    "/app/Playlist_Presets",
+    "/app/Extras"
+]
+
+def apply_unraid_permissions():
+    """Forces 777 permissions on key directories to prevent SMB lockouts."""
+    for folder in FOLDERS_TO_UNLOCK:
+        if os.path.exists(folder):
+            try:
+                # 0o777 gives Read/Write/Execute to Everyone
+                os.chmod(folder, 0o777)
+                
+                # Walk through subfolders and files to unlock them too
+                for root, dirs, files in os.walk(folder):
+                    for d in dirs:
+                        os.chmod(os.path.join(root, d), 0o777)
+                    for f in files:
+                        os.chmod(os.path.join(root, f), 0o777)
+            except Exception as e:
+                print(f"Permission Sync Warning: {e}")
+
+# Run this before the Streamlit UI loads
+apply_unraid_permissions()
+
 
 # ---------------------------
 # Config dataclass
