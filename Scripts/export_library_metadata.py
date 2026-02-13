@@ -41,6 +41,7 @@ _date_prefix = datetime.now().strftime("%Y_%m_%d")
 ENV_OUTPUT_CSV = os.environ.get("OUTPUT_CSV")
 compat_output_csv = None
 
+# --- Updated OUTPUT handling for Unraid compatibility ---
 if ENV_OUTPUT_CSV:
     out_dir = os.path.dirname(os.path.abspath(ENV_OUTPUT_CSV)) or os.getcwd()
     base = os.path.basename(ENV_OUTPUT_CSV)
@@ -52,9 +53,21 @@ if ENV_OUTPUT_CSV:
         OUTPUT_CSV = os.path.abspath(ENV_OUTPUT_CSV)
         compat_output_csv = None
 else:
-    out_dir = os.getcwd()
+    # 1. NEW: Check if we are running in the Unraid container with a mapped folder
+    if os.path.exists("/app/Exports"):
+        out_dir = "/app/Exports"
+    else:
+        out_dir = os.getcwd()
+    
     OUTPUT_CSV = os.path.join(out_dir, f"{_date_prefix} Track_Level_Info.csv")
     compat_output_csv = None
+
+# 2. NEW: Ensure the output directory is unlocked (chmod 777)
+if os.path.exists(out_dir):
+    try:
+        os.chmod(out_dir, 0o777)
+    except:
+        pass
 
 print(f"Connecting to Plex @ {PLEX_BASEURL} ...", flush=True)
 try:
@@ -399,6 +412,10 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
             continue
 
 print(f"✅ Export complete: {total_written} tracks written to '{OUTPUT_CSV}'.", flush=True)
+try:
+    os.chmod(OUTPUT_CSV, 0o777) 
+except:
+    pass
 
 if compat_output_csv and os.path.abspath(OUTPUT_CSV) != os.path.abspath(compat_output_csv):
     try:
@@ -435,6 +452,10 @@ with open(ALBUM_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
             _sorted_unique_join(b["file_types"]), bitrate_avg, album_mb, _sorted_unique_join(b["date_created_dates"]),
         ])
 print(f"✅ Album summary complete: wrote '{ALBUM_INFO_CSV}'.", flush=True)
+try:
+    os.chmod(ALBUM_INFO_CSV, 0o777) # Unlock Album CSV
+except:
+    pass
 
 # Artist Summary
 ARTIST_INFO_CSV = os.path.join(out_dir, f"{_date_prefix} Artist_Level_Info.csv")
@@ -461,3 +482,7 @@ with open(ARTIST_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
             min(bitrates) if bitrates else "", max(bitrates) if bitrates else "", size_mb,
         ])
 print(f"✅ Artist summary complete: wrote '{ARTIST_INFO_CSV}'.", flush=True)
+try:
+    os.chmod(ARTIST_INFO_CSV, 0o777) # Unlock Artist CSV
+except:
+    pass
