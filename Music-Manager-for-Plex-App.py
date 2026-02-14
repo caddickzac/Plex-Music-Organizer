@@ -13,6 +13,14 @@ from glob import glob
 import streamlit as st
 import pandas as pd
 from plexapi.server import PlexServer  # type: ignore
+try:
+    import networkx as nx
+    import plotly.graph_objects as go
+    import community.community_louvain as community_louvain
+    HAS_GALAXY_DEPS = True
+except ImportError:
+    HAS_GALAXY_DEPS = False
+from Scripts import plex_galaxy, artist_recommender  # Import from the subfolder
 
 # --- Version Configuration ---
 CURRENT_VERSION = "v1.1.6"
@@ -201,29 +209,32 @@ def scripts_signature() -> str:
 
 def discover_scripts(include_exports: bool = True, _sig: str = "") -> Dict[str, ScriptInfo]:
     """
-    Discover scripts in SCRIPTS_DIR. Optional sidecar JSON per script:
-      {"action": "relabel: track title",
-       "expected_columns": [...],
-       "expected_values": [...]}
-
-    If include_exports is False, hide export-oriented scripts (e.g., export_library_metadata.py,
-    or anything whose sidecar/label contains 'export').
-    `_sig` is unused except to bust the cache when the folder changes.
+    Discover scripts in SCRIPTS_DIR.
+    Excludes system files (__init__.py) and UI modules (plex_galaxy.py).
     """
     reg: Dict[str, ScriptInfo] = {}
     if not os.path.isdir(SCRIPTS_DIR):
         return reg
 
+    # Files to explicitly ignore in the dropdown
+    IGNORED_FILES = {
+        "__init__.py", 
+        "plex_galaxy.py", 
+        "playlist_creator.py",
+        "artist_recommender.py"
+    }
+
     for py in sorted(glob(os.path.join(SCRIPTS_DIR, "*.py"))):
         base = os.path.basename(py).lower()
+        
+        # SKIP IGNORED FILES
+        if base in IGNORED_FILES:
+            continue
+
         meta_path = os.path.splitext(py)[0] + ".json"
         action = prettify_action_label(py)
         schema: List[str] = []
         expected_values: List[str] = []
-
-        # Skip Playlist Creator from the CSV update actions
-        if base == "playlist_creator.py":
-            continue
 
         try:
             if os.path.isfile(meta_path):
@@ -370,13 +381,21 @@ def success_message_for_action(action_label: str, edited: int | None) -> str:
 # ---------------------------
 # Forgiving CSV reader
 # ---------------------------
-def read_csv_forgiving(uploaded_file) -> pd.DataFrame:
+def read_csv_forgiving(source) -> pd.DataFrame:
     """
-    Read a user-uploaded CSV with encoding fallbacks.
-    Tries: utf-8, utf-8-sig, cp1252, latin-1
+    Read a CSV with encoding fallbacks.
+    Handles both uploaded file objects (Streamlit) and local file paths (Strings).
     """
-    raw = uploaded_file.getvalue()
+    # 1. Determine if source is a path string or an uploaded file object
+    if isinstance(source, str):
+        # It's a file path string
+        with open(source, "rb") as f:
+            raw = f.read()
+    else:
+        # It's a Streamlit UploadedFile object
+        raw = source.getvalue()
 
+    # 2. Try various encodings to read the binary data
     for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
         try:
             return pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False, encoding=enc)
@@ -385,6 +404,7 @@ def read_csv_forgiving(uploaded_file) -> pd.DataFrame:
         except Exception:
             pass
 
+    # 3. Last resort fallback
     text = raw.decode("utf-8", errors="replace")
     return pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
 
@@ -2016,6 +2036,276 @@ def ui_compare_tab():
     except Exception as e:
         st.error(f"Comparison failed: {e}")
 
+# ---------------------------------
+# GALAXY / NETWORK VISUALIZATION TAB
+# ---------------------------------
+@st.cache_data(show_spinner=False)
+def process_galaxy_data(csv_file):
+    """
+    Parses the Artist_Level_Info.csv, builds a 3D NetworkX graph,
+    detects communities (clusters), and computes the 3D spring layout.
+    Returns the dataframe enriched with x,y,z coordinates and cluster IDs.
+    """
+    # 1. Load Data
+    try:
+        df = pd.read_csv(csv_file)
+    except Exception:
+        # Fallback for forgiving read if standard fails
+        df = read_csv_forgiving(csv_file)
+    
+    # Validation
+    required_cols = ['Artist', 'Similar_Artists']
+    if not all(col in df.columns for col in required_cols):
+        return None, "CSV missing required columns: 'Artist' or 'Similar_Artists'"
+
+    df['Similar_Artists'] = df['Similar_Artists'].fillna('')
+    
+    # 2. Build Graph
+    G = nx.Graph()
+    library_nodes = set(df['Artist'].unique())
+    
+    # Add Library Nodes
+    for artist in library_nodes:
+        G.add_node(artist, type='Library')
+
+    # Add Edges & Missing Nodes
+    for _, row in df.iterrows():
+        source = row['Artist']
+        similars = [s.strip() for s in row['Similar_Artists'].split(',') if s.strip()]
+        for target in similars:
+            if target not in library_nodes:
+                G.add_node(target, type='Missing')
+            G.add_edge(source, target)
+            
+    # 3. Detect Communities (Louvain) -> "Clusters"
+    # Resolution < 1.0 = larger communities, > 1.0 = smaller/more communities
+    try:
+        partition = community_louvain.best_partition(G, resolution=1.2)
+    except Exception:
+        # Fallback if louvain fails or empty graph
+        partition = {n: 0 for n in G.nodes()}
+
+    # 4. Compute 3D Layout (Physics)
+    # k controls node spacing. Smaller = tighter.
+    pos = nx.spring_layout(G, dim=3, k=0.15, iterations=40, seed=42)
+
+    # 5. Format for Plotly
+    node_data = []
+    for node in G.nodes():
+        x, y, z = pos[node]
+        cluster = partition[node]
+        node_type = G.nodes[node]['type']
+        
+        node_data.append({
+            "Artist": node,
+            "x": x, "y": y, "z": z,
+            "Cluster": str(cluster),
+            "Type": node_type
+        })
+        
+    final_df = pd.DataFrame(node_data)
+    
+    # Add Play Count or Recommendation Count metrics if available?
+    # For now, we stick to the clean "Cluster" logic requested.
+    
+    return final_df, G
+
+def ui_galaxy_tab():
+    st.subheader("🌌 Plex Music Galaxy")
+    
+    if not HAS_GALAXY_DEPS:
+        st.error("Missing dependencies. Please run: `pip install networkx plotly python-louvain`")
+        return
+
+    st.caption("Visualize your library as a 3D star map. Colors represent sonic clusters.")
+
+    # 1. File Selection (Upload or Export Folder)
+    # Check Exports folder for compatible files
+    export_files = []
+    if os.path.exists(EXPORTS_DIR):
+        export_files = [f for f in os.listdir(EXPORTS_DIR) if "Artist_Level_Info" in f and f.endswith(".csv")]
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        input_method = st.radio("Input Source", ["Select from Exports", "Upload File"], horizontal=True)
+    
+    csv_source = None
+    if input_method == "Select from Exports":
+        if not export_files:
+            st.info(f"No 'Artist_Level_Info' files found in {EXPORTS_DIR}. Please run an export first.")
+        else:
+            selected_file = st.selectbox("Select File", sorted(export_files, reverse=True))
+            csv_source = os.path.join(EXPORTS_DIR, selected_file)
+    else:
+        uploaded_file = st.file_uploader("Upload 'Artist_Level_Info.csv'", type=["csv"])
+        if uploaded_file:
+            csv_source = uploaded_file
+
+    if not csv_source:
+        return
+
+    # 2. Process Data
+    with st.spinner("Computing galaxy layout (physics simulation)..."):
+        try:
+            plot_df, G = process_galaxy_data(csv_source)
+            if plot_df is None: # Error case
+                st.error(G) # G contains error message string here
+                return
+        except Exception as e:
+            st.error(f"Error processing graph: {e}")
+            return
+
+    st.divider()
+
+    # 3. Controls
+    c_ctrl1, c_ctrl2 = st.columns([1, 2])
+    with c_ctrl1:
+        show_missing = st.toggle("Show Missing Artists (Red Nodes)", value=False)
+        
+    # Filter Data based on toggle
+    if show_missing:
+        # Show everything
+        filtered_df = plot_df.copy()
+    else:
+        # Show only library nodes
+        filtered_df = plot_df[plot_df['Type'] == 'Library'].copy()
+
+    # Search / Focus
+    # Only allow searching for nodes currently in the graph
+    available = sorted(filtered_df['Artist'].unique())
+    with c_ctrl2:
+        target_artist = st.selectbox("🔭 Focus on Artist", options=available, index=0 if available else None)
+
+    # 4. Plot Logic
+    if target_artist and not filtered_df.empty:
+        
+        # Identify Neighbors
+        if target_artist in G:
+            # We get neighbors from the full graph G so connections exist even if hidden
+            # But we only display them if they are in filtered_df
+            raw_neighbors = list(G.neighbors(target_artist))
+            visible_neighbors = set(raw_neighbors).intersection(set(filtered_df['Artist']))
+        else:
+            visible_neighbors = set()
+
+        # Assign Display Types
+        def assign_style(row):
+            if row['Artist'] == target_artist:
+                return "Focus", 20, 1.0  # Type, Size, Opacity
+            elif row['Artist'] in visible_neighbors:
+                return "Neighbor", 10, 0.9
+            return "Background", 4, 0.2
+
+        # Apply styles
+        # Vectorized apply is messy with multiple returns, simple iteration is fast enough for <10k nodes
+        styles = filtered_df.apply(assign_style, axis=1, result_type='expand')
+        filtered_df[['display_type', 'pt_size', 'pt_opacity']] = styles
+
+        # Color Logic
+        # Library -> Cluster Color
+        # Missing -> Red
+        # We handle this by splitting traces.
+
+        fig = go.Figure()
+
+        # -- TRACE A: BACKGROUND (Library) --
+        # Colored by cluster, small, faint
+        bg_lib = filtered_df[(filtered_df['display_type'] == 'Background') & (filtered_df['Type'] == 'Library')]
+        if not bg_lib.empty:
+            # We iterate clusters to get distinct colors in legend/plot
+            for cluster_id in sorted(bg_lib['Cluster'].unique()):
+                clust_data = bg_lib[bg_lib['Cluster'] == cluster_id]
+                fig.add_trace(go.Scatter3d(
+                    x=clust_data['x'], y=clust_data['y'], z=clust_data['z'],
+                    mode='markers',
+                    marker=dict(size=4, opacity=0.3),
+                    hovertext=clust_data['Artist'],
+                    hoverinfo='text',
+                    name=f'Cluster {cluster_id}',
+                    legendgroup='Clusters'
+                ))
+
+        # -- TRACE B: BACKGROUND (Missing) --
+        # Red, small, faint
+        bg_miss = filtered_df[(filtered_df['display_type'] == 'Background') & (filtered_df['Type'] == 'Missing')]
+        if not bg_miss.empty:
+            fig.add_trace(go.Scatter3d(
+                x=bg_miss['x'], y=bg_miss['y'], z=bg_miss['z'],
+                mode='markers',
+                marker=dict(size=3, color='#ff4b4b', opacity=0.2), # Standard Red
+                hovertext=bg_miss['Artist'],
+                hoverinfo='text',
+                name='Missing Artists',
+                legendgroup='Missing'
+            ))
+
+        # -- TRACE C: NEIGHBORS (Library + Missing) --
+        # Larger, brighter. 
+        # We want to maintain their color logic (Red vs Cluster) but boost opacity/size.
+        neighbors = filtered_df[filtered_df['display_type'] == 'Neighbor']
+        if not neighbors.empty:
+            # We can use a trick: Plot all neighbors in one go, but define individual colors
+            # Or split them. Splitting is cleaner for the 'Red' requirement.
+            
+            # Neighbor (Library)
+            n_lib = neighbors[neighbors['Type'] == 'Library']
+            if not n_lib.empty:
+                 # To keep cluster colors, we rely on Plotly's default cycling match 
+                 # OR we just make neighbors a distinct 'Highlight' color (e.g. White/Cyan).
+                 # To match your R script: "Color is always by Cluster"
+                 # Plotly Scatter3d doesn't easily map a column to color AND allow discrete clusters 
+                 # without complex color_continuous_scale.
+                 # Simplification: Neighbors get a bright generic color (Cyan) to stand out, 
+                 # OR we iterate clusters again. Let's use Cyan for contrast.
+                 fig.add_trace(go.Scatter3d(
+                    x=n_lib['x'], y=n_lib['y'], z=n_lib['z'],
+                    mode='markers+text',
+                    marker=dict(size=8, color='#00d2ff', opacity=0.9), # Cyan
+                    text=n_lib['Artist'], textposition="top center",
+                    textfont=dict(size=10, color="white"),
+                    name='Related (Library)'
+                ))
+            
+            # Neighbor (Missing)
+            n_miss = neighbors[neighbors['Type'] == 'Missing']
+            if not n_miss.empty:
+                 fig.add_trace(go.Scatter3d(
+                    x=n_miss['x'], y=n_miss['y'], z=n_miss['z'],
+                    mode='markers+text',
+                    marker=dict(size=8, color='#ff4b4b', opacity=0.9, symbol='diamond'), # Red Diamond
+                    text=n_miss['Artist'], textposition="top center",
+                    textfont=dict(size=10, color="#ffcbcb"),
+                    name='Related (Missing)'
+                ))
+
+        # -- TRACE D: FOCUS --
+        focus = filtered_df[filtered_df['display_type'] == 'Focus']
+        if not focus.empty:
+            fig.add_trace(go.Scatter3d(
+                x=focus['x'], y=focus['y'], z=focus['z'],
+                mode='markers+text',
+                marker=dict(size=20, color='white', line=dict(width=2, color='black')),
+                text=focus['Artist'], textposition="top center",
+                textfont=dict(size=14, color="yellow", family="Arial Black"),
+                name='Selected'
+            ))
+
+        # Layout styling (No axis labels, dark theme)
+        fig.update_layout(
+            height=800,
+            margin=dict(l=0, r=0, b=0, t=0),
+            scene=dict(
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                zaxis=dict(visible=False),
+                bgcolor='#0e1117' # Dark Streamlit background match
+            ),
+            paper_bgcolor='#0e1117',
+            legend=dict(itemsizing='constant', font=dict(color='white')),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
 # ---------------------------
 # Main
 # ---------------------------
@@ -2056,13 +2346,16 @@ def main():
     st.caption("Export music metadata, update metadata, and build intelligent playlists.")
     cfg = ui_sidebar_config()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "Export",
         "Update from CSV (Single Script)",
         "Update from CSV (Multiple Scripts)",
         "Compare Exported Metadata",
         "Playlist Creator",
+        "Galaxy Explorer",
+        "Artist Recommender"
     ])
+
     with tab1:
         ui_export_tab(cfg)
     with tab2:
@@ -2073,6 +2366,80 @@ def main():
         ui_compare_tab()
     with tab5:
         ui_playlist_creator_tab(cfg)
+    with tab6:
+        # Initialize session state for this tab
+        if "galaxy_launched" not in st.session_state:
+            st.session_state["galaxy_launched"] = False
+
+        # If not launched yet, show the button
+        if not st.session_state["galaxy_launched"]:
+            st.info("The Galaxy Explorer creates a 3D visualization of your music library. This requires significant processing power.")
+            if st.button("Launch Galaxy Explorer", type="primary"):
+                st.session_state["galaxy_launched"] = True
+                st.rerun()
+        
+        # If launched, run the module
+        else:
+            plex_galaxy.run()
+            # Optional: Add a 'Close' button to reset
+            if st.button("Close Visualization"):
+                st.session_state["galaxy_launched"] = False
+                st.rerun()
+    with tab7:
+        st.subheader("Similar Artist Recommender")
+        st.caption("Discover missing artists based on library similarity and listening intensity.")
+
+        # 1. File Discovery
+        export_files = []
+        if os.path.exists(EXPORTS_DIR):
+            export_files = [f for f in os.listdir(EXPORTS_DIR) if "Artist_Level_Info" in f and f.endswith(".csv")]
+        
+        if not export_files:
+            st.info("Please run an Export first to generate recommendations.")
+        else:
+            selected_file = st.selectbox("Select Artist Metadata File", sorted(export_files, reverse=True), key="rec_file_select")
+            
+            if st.button("Generate Recommendations", type="primary"):
+                file_path = os.path.join(EXPORTS_DIR, selected_file)
+                input_df = read_csv_forgiving(file_path)
+                
+                with st.spinner("Analyzing library connections..."):
+                    recs_df = artist_recommender.get_recommendations(input_df)
+                
+                st.success(f"Found {len(recs_df)} artists missing from your library.")
+
+                # --- AUTO-SAVE LOGIC ---
+                from datetime import datetime
+                date_str = datetime.now().strftime("%Y_%m_%d")
+                auto_filename = f"{date_str} Artist_Recommendations.csv"
+                auto_save_path = os.path.join(EXPORTS_DIR, auto_filename)
+                
+                try:
+                    recs_df.to_csv(auto_save_path, index=False, encoding="utf-8")
+                    st.info(f"Automatically saved to: `{auto_save_path}`")
+                except Exception as e:
+                    st.error(f"Failed to auto-save file: {e}")
+                # -----------------------
+
+                # Display Results
+                st.dataframe(
+                    recs_df.head(50), 
+                    use_container_width=True,
+                    column_config={
+                        "Priority_Score": st.column_config.NumberColumn("Priority Score", format="%.2f"),
+                        "Related_Library_Artists_Total_Play_Count": "Total Plays of Peers"
+                    }
+                )
+
+                # Manual Download Button
+                csv_buffer = io.BytesIO()
+                recs_df.to_csv(csv_buffer, index=False)
+                st.download_button(
+                    f"Download {auto_filename}",
+                    data=csv_buffer.getvalue(),
+                    file_name=auto_filename,
+                    mime="text/csv"
+                )
 
 
 if __name__ == "__main__":

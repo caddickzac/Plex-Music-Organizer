@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-Export Plex music library metadata to CSV.
+Export Plex music library metadata to CSV - Strict Original Logic with Hierarchical Moves & Fixes.
 """
 
 import os
 import sys
 import csv
 import shutil
+import statistics
+import re # Added for robust gain/loudness parsing
 from collections import defaultdict
 from datetime import datetime
 from plexapi.server import PlexServer
 
-# --- Console encoding safety (Windows) ---
+# --- Console encoding safety ---
 try:
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -41,7 +43,6 @@ _date_prefix = datetime.now().strftime("%Y_%m_%d")
 ENV_OUTPUT_CSV = os.environ.get("OUTPUT_CSV")
 compat_output_csv = None
 
-# --- Updated OUTPUT handling for Unraid compatibility ---
 if ENV_OUTPUT_CSV:
     out_dir = os.path.dirname(os.path.abspath(ENV_OUTPUT_CSV)) or os.getcwd()
     base = os.path.basename(ENV_OUTPUT_CSV)
@@ -53,7 +54,6 @@ if ENV_OUTPUT_CSV:
         OUTPUT_CSV = os.path.abspath(ENV_OUTPUT_CSV)
         compat_output_csv = None
 else:
-    # 1. NEW: Check if we are running in the Unraid container with a mapped folder
     if os.path.exists("/app/Exports"):
         out_dir = "/app/Exports"
     else:
@@ -62,12 +62,9 @@ else:
     OUTPUT_CSV = os.path.join(out_dir, f"{_date_prefix} Track_Level_Info.csv")
     compat_output_csv = None
 
-# 2. NEW: Ensure the output directory is unlocked (chmod 777)
 if os.path.exists(out_dir):
-    try:
-        os.chmod(out_dir, 0o777)
-    except:
-        pass
+    try: os.chmod(out_dir, 0o777)
+    except: pass
 
 print(f"Connecting to Plex @ {PLEX_BASEURL} ...", flush=True)
 try:
@@ -80,16 +77,12 @@ except Exception as e:
 # Helpers
 # ---------------------------------
 def _safe_join(tags):
-    try:
-        return ", ".join(t.tag for t in (tags or []))
-    except Exception:
-        return ""
+    try: return ", ".join(t.tag for t in (tags or []))
+    except Exception: return ""
 
 def _safe_date_str(d):
-    try:
-        return str(d) if d else ""
-    except Exception:
-        return ""
+    try: return str(d) if d else ""
+    except Exception: return ""
 
 def _date_only(val) -> str:
     if not val: return ""
@@ -109,8 +102,7 @@ def _track_genres_from_xml(track):
     except Exception:
         try:
             return ", ".join(g.tag for g in (getattr(track, "genres", None) or []))
-        except Exception:
-            return ""
+        except Exception: return ""
 
 def _split_csvish(s: str):
     if not s: return []
@@ -121,32 +113,28 @@ def _sorted_unique_join(items):
     return ", ".join(cleaned) if cleaned else ""
 
 def _try_float(x):
+    # FIX: Robust parsing for "7.2 dB" or "14 LUFS"
     try:
         if x is None: return None
         if isinstance(x, (int, float)): return float(x)
         s = str(x).strip()
         if not s: return None
-        return float(s)
-    except Exception:
-        return None
+        # Extract number from string (e.g. "-7.2 dB" -> -7.2)
+        match = re.search(r"[-+]?\d*\.\d+|\d+", s)
+        return float(match.group()) if match else None
+    except Exception: return None
 
 def _avg(vals):
     vals = [v for v in vals if isinstance(v, (int, float))]
     return (sum(vals) / len(vals)) if vals else ""
 
 def _deep_search_attr(track, candidates):
-    """
-    Searches for a value across Track -> XML -> Media -> Stream using a list of candidate keys.
-    """
-    # 1. Search Track Object & Track XML
     for key in candidates:
         val = getattr(track, key, None)
         if val is not None and str(val).strip(): return val
         if hasattr(track, "_data") and hasattr(track._data, "attrib"):
             val = track._data.attrib.get(key)
             if val is not None and str(val).strip(): return val
-
-    # 2. Search Media Objects
     if hasattr(track, "media") and track.media:
         for media in track.media:
             for key in candidates:
@@ -155,13 +143,11 @@ def _deep_search_attr(track, candidates):
                 if hasattr(media, "_data") and hasattr(media._data, "attrib"):
                     val = media._data.attrib.get(key)
                     if val is not None and str(val).strip(): return val
-            
-            # 3. Search Parts & Audio Streams
             if hasattr(media, "parts") and media.parts:
                 for part in media.parts:
                     if hasattr(part, "streams") and part.streams:
                         for stream in part.streams:
-                            if stream.streamType == 2: # Audio stream
+                            if stream.streamType == 2: 
                                 for key in candidates:
                                     val = getattr(stream, key, None)
                                     if val is not None and str(val).strip(): return val
@@ -174,12 +160,9 @@ def _deep_search_attr(track, candidates):
 # Step 1: Map playlists → file path
 # ---------------------------------
 track_to_playlists = defaultdict(set)
-
 if DO_PLAYLISTS:
     print("Scanning playlists ...", flush=True)
     music_playlists = [pl for pl in plex.playlists() if getattr(pl, "playlistType", "") == "audio"]
-    print(f"Found {len(music_playlists)} audio playlists.", flush=True)
-
     for idx, playlist in enumerate(music_playlists, start=1):
         try:
             for track in playlist.items():
@@ -189,12 +172,10 @@ if DO_PLAYLISTS:
                     file_path = getattr(part, "file", "") if part else ""
                     if file_path:
                         track_to_playlists[file_path].add(playlist.title)
-                except Exception:
-                    pass
+                except Exception: pass
         finally:
             if idx % 5 == 0 or idx == len(music_playlists):
                 print(f"  mapped {idx}/{len(music_playlists)} playlists ...", flush=True)
-    print("✅ Playlist mapping complete.", flush=True)
 else:
     print("⏭️  Skipping Playlist mapping (disabled by user).", flush=True)
 
@@ -202,25 +183,18 @@ else:
 # Step 2: Extract full track metadata
 # ---------------------------------
 music_library = next((s for s in plex.library.sections() if getattr(s, "TYPE", "") == "artist"), None)
-if music_library is None:
-    sys.stderr.write("🎵 No music library (artist-type section) found.\n")
-    sys.exit(3)
-
 artists = music_library.search()
-print(f"Scanning {len(artists)} artists ...", flush=True)
 
+# 1. EDIT: Remove Gain, Loudness, Record_Label from Track Header
 header = [
     "Filename", "Title", "Track_Artist", "Album_Artist", "Album",
     "Track_ID", "Artist_ID", "Album_ID", "Media_ID",
     "Track_Genres", "Album_Genres", "Artist_Genres",
 ]
-
-# Standard Columns (Permanent)
 header += [
     "Date", "Date_Cleaned", "Bitrate", "Duration",
     "Track #", "Disc #", "File Type", "File Size (MB)",
     "Date Created", "Date Modified",
-    "Record_Label", "Gain", "Loudness", "Similar_Artists", 
     "Artist_Collections", "Album_Collections", "Track_Collections", "Mood",
     "Playlists", "User_Rating", "Play_Count", "Track_Popularity", "Last_Played", "Labels", "Lyrics"
 ]
@@ -235,6 +209,7 @@ def _album_bucket(album_artist: str, album_name: str):
             "artist_collections": set(), "album_collections": set(), "track_collections": set(),
             "playlists": set(), "file_types": set(), "bitrate_vals": [],
             "file_size_bytes_sum": 0, "date_created_dates": set(),
+            "gain_vals": [], "loudness_vals": [], "record_labels": set()
         }
     return album_acc[key]
 
@@ -245,6 +220,7 @@ def _artist_bucket(artist_name: str):
         artist_acc[k] = {
             "albums": set(), "years": set(), "track_count": 0,
             "artist_collections": set(), "bitrate_vals": [], "file_size_bytes_sum": 0,
+            "similar_artists": "", "popularity_vals": [], "total_plays": 0 
         }
     return artist_acc[k]
 
@@ -265,6 +241,8 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
             artist_collections = _safe_join(getattr(artist, "collections", None))
 
             ab = _artist_bucket(artist_name)
+            sims = getattr(artist, "similar", [])
+            ab["similar_artists"] = ", ".join([s.tag if hasattr(s, "tag") else s.title for s in sims])
             for item in _split_csvish(artist_collections):
                 ab["artist_collections"].add(item)
 
@@ -278,132 +256,128 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
                     album_collections = _safe_join(getattr(album, "collections", None))
                     album_id = getattr(album, "ratingKey", "") or ""
                     
-                    # FETCH RECORD LABEL (from Album.studio)
-                    record_label = getattr(album, "studio", "") or ""
+                    label_temp = getattr(album, "studio", "") or ""
 
                     ab["albums"].add(album_name_obj)
 
                     tracks = album.tracks()
                     for track in tracks:
-                        # --- HARD LIMIT CHECK ---
-                        if EXPORT_LIMIT > 0 and total_processed >= EXPORT_LIMIT:
-                            break
+                        if EXPORT_LIMIT > 0 and total_processed >= EXPORT_LIMIT: break
                         
                         total_processed += 1 
 
                         try:
-                            # 1. Fetch Basic Metadata
+                            # Basic Metadata
                             media = track.media[0] if getattr(track, "media", None) else None
                             part = media.parts[0] if (media and getattr(media, "parts", None)) else None
                             file_path = getattr(part, "file", "") if part else ""
                             title = getattr(track, "title", "") or ""
                             
+                            # FIX: Use track-level grouping key (Assessment Pt 5)
                             album_artist = getattr(track, "grandparentTitle", "") or ""
-                            track_artist = getattr(track, "originalTitle", "") or ""
-                            album_name  = getattr(track, "parentTitle", "") or album_name_obj or ""
-                            track_id = getattr(track, "ratingKey", "") or ""
-                            media_id = getattr(media, "id", "") if media else ""
-                            artist_id = getattr(track, "grandparentRatingKey", "") or ""
-                            album_id_track = getattr(track, "parentRatingKey", "") or album_id or ""
-                            track_genres = _track_genres_from_xml(track)
+                            album_name_track = getattr(track, "parentTitle", "") or album_name_obj or ""
                             
-                            # FETCH GAIN / LOUDNESS
-                            # Only reload if we really need deep stream data (optional but safer for gain/loudness)
-                            # track.reload() 
+                            # Update Album Bucket
+                            b = _album_bucket(album_artist, album_name_track)
+                            if label_temp: b["record_labels"].add(label_temp)
+
+                            # 1. EDIT: Capture Gain/Loudness (Robust)
+                            # FIX: Reload track to ensure deep streams are available (Assessment Pt 4)
                             try:
                                 track.reload()
                             except Exception:
-                                pass 
-                                
+                                pass
+                            
                             gain = _deep_search_attr(track, ["gain", "replayGain", "albumGain"])
                             loudness = _deep_search_attr(track, ["loudness"])
+                            
+                            g_val = _try_float(gain)
+                            l_val = _try_float(loudness)
+                            if g_val is not None: b["gain_vals"].append(g_val)
+                            if l_val is not None: b["loudness_vals"].append(l_val)
 
-                            # FETCH SIMILAR ARTISTS (Standard Metadata only)
-                            similar_str = ""
-                            try:
-                                sims = getattr(artist, "similar", [])
-                                sim_artists = [s.tag if hasattr(s, "tag") else s.title for s in sims]
-                                similar_str = ", ".join(sim_artists)
-                            except Exception:
-                                pass
+                            # 3. EDIT: Capture Artist Stats
+                            p_count = getattr(track, "viewCount", 0) or 0
+                            rating_count = getattr(track, "ratingCount", 0) or 0
+                            ab["total_plays"] += p_count
+                            ab["popularity_vals"].append(int(rating_count))
+                            
+                            # Collections
+                            track_collections = _safe_join(getattr(track, "collections", None))
+                            for item in _split_csvish(artist_collections): b["artist_collections"].add(item)
+                            for item in _split_csvish(album_collections): b["album_collections"].add(item)
+                            for item in _split_csvish(track_collections): b["track_collections"].add(item)
 
-                            # 3. Standard Data
-                            album_date = getattr(album, "originallyAvailableAt", None)
-                            date_cleaned = getattr(album_date, "year", "") if album_date else ""
-                            date_str = _safe_date_str(album_date)
+                            # FIX: Restore Duration Logic (m:ss)
                             duration_ms = getattr(track, "duration", 0) or 0
                             duration_seconds = int(duration_ms / 1000) if duration_ms else 0
                             minutes = duration_seconds // 60
                             seconds = duration_seconds % 60
                             duration_cleaned = f"{minutes}:{str(seconds).zfill(2)}" if duration_seconds else ""
-                            file_size_bytes = getattr(part, "size", 0) or 0
-                            file_size_mb = round(file_size_bytes / (1024 * 1024), 1) if file_size_bytes else 0
-                            file_type = getattr(part, "container", "") if part else ""
-                            bitrate = getattr(media, "bitrate", "") if media else ""
-                            date_created = getattr(track, "addedAt", "")
-                            date_modified = getattr(track, "updatedAt", "")
-                            moods             = _safe_join(getattr(track, "moods", None))
-                            labels            = _safe_join(getattr(track, "labels", None))
-                            track_collections = _safe_join(getattr(track, "collections", None))
-                            playlists = ", ".join(sorted(track_to_playlists[file_path])) if file_path in track_to_playlists else ""
-                            user_rating  = getattr(track, "userRating", "") or ""
-                            play_count   = getattr(track, "viewCount", 0) or 0
-                            rating_count = getattr(track, "ratingCount", 0) or 0
-                            last_played  = getattr(track, "lastViewedAt", "") or ""
-                            track_num = getattr(track, "index", "") or ""
-                            disc_num  = getattr(track, "parentIndex", "") or ""
+
+                            # FIX: Restore Playlist Lookup Logic
+                            plist_str = ", ".join(sorted(track_to_playlists[file_path])) if file_path in track_to_playlists else ""
+                            
+                            # FIX: Use correct Album ID source (Assessment Pt 2)
+                            album_id_track = getattr(track, "parentRatingKey", "") or album_id or ""
 
                             row = [
-                                file_path, title, track_artist, album_artist, album_name,
-                                track_id, artist_id, album_id_track, media_id, 
-                                track_genres, album_genres, artist_genres
+                                file_path, title, getattr(track, "originalTitle", ""), album_artist, album_name_track,
+                                getattr(track, "ratingKey", ""), artist.ratingKey, album_id_track, getattr(media, "id", ""), 
+                                _track_genres_from_xml(track), album_genres, artist_genres
                             ]
                             
                             row += [
-                                date_str, date_cleaned, bitrate, duration_cleaned,
-                                track_num, disc_num, file_type, file_size_mb,
-                                date_created, date_modified,
-                                record_label, gain, loudness, similar_str,
-                                artist_collections, album_collections, track_collections, moods,
-                                playlists, user_rating, play_count, int(rating_count), last_played, labels, getattr(track, "lyrics", "") or ""
+                                _safe_date_str(getattr(album, "originallyAvailableAt", None)), 
+                                getattr(getattr(album, "originallyAvailableAt", None), "year", ""), 
+                                getattr(media, "bitrate", ""), duration_cleaned,
+                                getattr(track, "index", ""), getattr(track, "parentIndex", ""), 
+                                getattr(part, "container", ""), round(getattr(part, "size", 0) / (1024 * 1024), 1),
+                                getattr(track, "addedAt", ""), getattr(track, "updatedAt", ""),
+                                artist_collections, album_collections, track_collections, 
+                                _safe_join(getattr(track, "moods", None)),
+                                plist_str,
+                                getattr(track, "userRating", ""), p_count, int(rating_count), 
+                                getattr(track, "lastViewedAt", ""), _safe_join(getattr(track, "labels", None)), 
+                                getattr(track, "lyrics", "") or ""
                             ]
 
                             writer.writerow(row)
                             total_written += 1
 
-                            # Update accumulators
-                            b = _album_bucket(album_artist, album_name)
+                            # Update Standard Accumulators
                             b["track_count"] += 1
+                            # FIX: Accumulate album_id_track, not album_id object (Assessment Pt 2)
                             if album_id_track: b["album_ids"].add(str(album_id_track))
-                            if date_cleaned: b["years"].add(str(date_cleaned))
-                            for item in _split_csvish(artist_collections): b["artist_collections"].add(item)
-                            for item in _split_csvish(album_collections): b["album_collections"].add(item)
-                            for item in _split_csvish(track_collections): b["track_collections"].add(item)
-                            for item in _split_csvish(playlists): b["playlists"].add(item)
-                            if file_type: b["file_types"].add(str(file_type).strip())
-                            br = _try_float(bitrate)
-                            if br is not None: b["bitrate_vals"].append(br)
-                            if file_size_bytes: b["file_size_bytes_sum"] += int(file_size_bytes)
-                            dc = _date_only(date_created)
-                            if dc: b["date_created_dates"].add(dc)
+                            
+                            if getattr(getattr(album, "originallyAvailableAt", None), "year", ""): 
+                                b["years"].add(str(album.originallyAvailableAt.year))
+                            for item in _split_csvish(plist_str): b["playlists"].add(item)
+                            if getattr(part, "container", ""): b["file_types"].add(str(part.container).strip())
+                            
+                            # FIX: Guard against None in bitrate (Assessment Pt 3)
+                            br_val = _try_float(getattr(media, "bitrate", ""))
+                            if br_val is not None: b["bitrate_vals"].append(br_val)
+                            
+                            b["file_size_bytes_sum"] += getattr(part, "size", 0)
+                            if getattr(track, "addedAt", ""): b["date_created_dates"].add(_date_only(track.addedAt))
 
-                            ab = _artist_bucket(artist_name)
                             ab["track_count"] += 1
-                            if date_cleaned:
-                                try: ab["years"].add(int(date_cleaned))
+                            if getattr(getattr(album, "originallyAvailableAt", None), "year", ""):
+                                try: ab["years"].add(int(album.originallyAvailableAt.year))
                                 except: pass
-                            br2 = _try_float(bitrate)
+                            br2 = _try_float(getattr(media, "bitrate", ""))
                             if br2 is not None: ab["bitrate_vals"].append(br2)
-                            if file_size_bytes: ab["file_size_bytes_sum"] += int(file_size_bytes)
+                            ab["file_size_bytes_sum"] += getattr(part, "size", 0)
 
                         except Exception as e:
+                            # FIX: Restore error logging (Assessment Pt 5)
                             print(f"⚠️ Skipped a track due to error: {e}", flush=True)
                             continue
-
                 except Exception as e:
                     print(f"⚠️ Skipped an album due to error: {e}", flush=True)
                     continue
-
+            
             if a_idx % 10 == 0 or a_idx == len(artists):
                 print(f"  processed {a_idx}/{len(artists)} artists ... (tracks written: {total_written}, checked: {total_processed})", flush=True)
 
@@ -412,16 +386,12 @@ with open(OUTPUT_CSV, "w", newline="", encoding="utf-8-sig") as f:
             continue
 
 print(f"✅ Export complete: {total_written} tracks written to '{OUTPUT_CSV}'.", flush=True)
-try:
-    os.chmod(OUTPUT_CSV, 0o777) 
-except:
-    pass
+try: os.chmod(OUTPUT_CSV, 0o777) 
+except: pass
 
 if compat_output_csv and os.path.abspath(OUTPUT_CSV) != os.path.abspath(compat_output_csv):
-    try:
-        shutil.copyfile(OUTPUT_CSV, compat_output_csv)
-    except Exception as e:
-        print(f"⚠️ Could not write compatibility copy: {e}", flush=True)
+    try: shutil.copyfile(OUTPUT_CSV, compat_output_csv)
+    except Exception as e: print(f"⚠️ Could not write compatibility copy: {e}", flush=True)
 
 # ---------------------------------
 # Step 3: Write Album & Artist Summaries
@@ -430,7 +400,7 @@ out_dir = os.path.dirname(os.path.abspath(OUTPUT_CSV)) or os.getcwd()
 
 # Album Summary
 ALBUM_INFO_CSV = os.path.join(out_dir, f"{_date_prefix} Artist_Album_Info.csv")
-album_header = ["Album_Artist", "Album", "Album_ID", "Year", "Track_Count", "Artist_Collections", "Album_Collections", "Track_Collections", "Playlists", "File_Type", "Bitrate_Avg", "Album_File_MB_Size", "Date_Created"]
+album_header = ["Album_Artist", "Album", "Album_ID", "Year", "Track_Count", "Artist_Collections", "Album_Collections", "Track_Collections", "Playlists", "File_Type", "Bitrate_Avg", "Album_File_MB_Size", "Date_Created", "Record_Label", "Avg_Gain", "Avg_Loudness"]
 keys_sorted = sorted(album_acc.keys(), key=lambda k: (k[0].lower(), k[1].lower()))
 
 with open(ALBUM_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
@@ -438,28 +408,29 @@ with open(ALBUM_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
     w.writerow(album_header)
     for (album_artist, album_name) in keys_sorted:
         b = album_acc[(album_artist, album_name)]
+        bitrate_avg = _avg(b["bitrate_vals"])
+        album_mb = round(b["file_size_bytes_sum"] / (1024 * 1024), 1) if b["file_size_bytes_sum"] else 0
+        
+        # FIX: Restore numeric year sorting (Assessment Pt 1)
         try:
             years_sorted = sorted({int(y) for y in b["years"] if str(y).strip()})
             year_str = ", ".join(str(y) for y in years_sorted) if years_sorted else ""
         except:
             year_str = _sorted_unique_join(b["years"])
-        bitrate_avg = _avg(b["bitrate_vals"])
-        album_mb = round(b["file_size_bytes_sum"] / (1024 * 1024), 1) if b["file_size_bytes_sum"] else 0
+
         w.writerow([
             album_artist, album_name, _sorted_unique_join(b["album_ids"]), year_str, b["track_count"],
             _sorted_unique_join(b["artist_collections"]), _sorted_unique_join(b["album_collections"]),
             _sorted_unique_join(b["track_collections"]), _sorted_unique_join(b["playlists"]),
             _sorted_unique_join(b["file_types"]), bitrate_avg, album_mb, _sorted_unique_join(b["date_created_dates"]),
+            _sorted_unique_join(b["record_labels"]), _avg(b["gain_vals"]), _avg(b["loudness_vals"])
         ])
-print(f"✅ Album summary complete: wrote '{ALBUM_INFO_CSV}'.", flush=True)
-try:
-    os.chmod(ALBUM_INFO_CSV, 0o777) # Unlock Album CSV
-except:
-    pass
+try: os.chmod(ALBUM_INFO_CSV, 0o777)
+except: pass
 
 # Artist Summary
 ARTIST_INFO_CSV = os.path.join(out_dir, f"{_date_prefix} Artist_Level_Info.csv")
-artist_header = ["Artist", "Albums", "Years", "Album_Count", "Track_Count", "Artist_Collections", "Bitrate_Avg", "Bitrate_Min", "Bitrate_Max", "File_Size_Total_MB"]
+artist_header = ["Artist", "Similar_Artists", "Total_Plays", "Median_Track_Popularity", "Albums", "Years", "Album_Count", "Track_Count", "Artist_Collections", "Bitrate_Avg", "Bitrate_Min", "Bitrate_Max", "File_Size_Total_MB"]
 artist_keys_sorted = sorted(artist_acc.keys(), key=lambda x: x.lower())
 
 with open(ARTIST_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
@@ -467,22 +438,15 @@ with open(ARTIST_INFO_CSV, "w", newline="", encoding="utf-8-sig") as f:
     w.writerow(artist_header)
     for artist_name in artist_keys_sorted:
         a = artist_acc[artist_name]
-        albums = sorted({str(x).strip() for x in a["albums"] if str(x).strip()}, key=lambda x: x.lower())
-        years_int = sorted({y for y in a["years"] if isinstance(y, int)})
-        years_str = (f"{years_int[0]}-{years_int[-1]}" if years_int[0] != years_int[-1] else str(years_int[0])) if years_int else ""
+        med_pop = statistics.median(a["popularity_vals"]) if a["popularity_vals"] else 0
         bitrates = [v for v in a["bitrate_vals"] if isinstance(v, (int, float))]
-        bitrate_avg = _avg(bitrates)
-        bitrate_min = min(bitrates) if bitrates else ""
-        bitrate_max = max(bitrates) if bitrates else ""
-
+        years_int = sorted({y for y in a["years"] if isinstance(y, int)})
         size_mb = round(a["file_size_bytes_sum"] / (1024 * 1024), 1) if a["file_size_bytes_sum"] else 0
         w.writerow([
-            artist_name, ", ".join(albums), years_str, len(albums), int(a["track_count"]),
-            _sorted_unique_join(a["artist_collections"]), _avg(bitrates),
-            min(bitrates) if bitrates else "", max(bitrates) if bitrates else "", size_mb,
+            artist_name, a["similar_artists"], a["total_plays"], med_pop, ", ".join(sorted(a["albums"])),
+            (f"{years_int[0]}-{years_int[-1]}" if years_int[0] != years_int[-1] else str(years_int[0])) if years_int else "",
+            len(a["albums"]), int(a["track_count"]), _sorted_unique_join(a["artist_collections"]),
+            _avg(bitrates), min(bitrates) if bitrates else "", max(bitrates) if bitrates else "", size_mb,
         ])
-print(f"✅ Artist summary complete: wrote '{ARTIST_INFO_CSV}'.", flush=True)
-try:
-    os.chmod(ARTIST_INFO_CSV, 0o777) # Unlock Artist CSV
-except:
-    pass
+try: os.chmod(ARTIST_INFO_CSV, 0o777)
+except: pass
