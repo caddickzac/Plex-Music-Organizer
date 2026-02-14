@@ -734,10 +734,10 @@ Breakdown:
 The Galaxy Explorer is a 3D visualization tool that maps the artists in your library as a celestial constellation. It transforms your metadata into a physics-based network where proximity represents similarity.
 
 Key Features:
-    * Metadata-Driven Star Map: Navigate a 3D environment where every "star" represents an artist, positioned based on their relationships within the Plex ecosystem.
-    * Relationship Clustering: The explorer uses the Louvain method to detect communities, color-coding artists into clusters based on shared similarities
-    * The "Missing Artist" Overlay: Toggle the visibility of artists not currently in your library to identify collection gaps suggested by Plex's similarity data.
-    * Focus Mode: Selecting an artist centers the camera and highlights their immediate "Similar Artist" neighbors, allowing you to trace the web of influences across your library.
+* Metadata-Driven Star Map: Navigate a 3D environment where every "star" represents an artist, positioned based on their relationships within the Plex ecosystem.
+* Relationship Clustering: The explorer uses the Louvain method to detect communities, color-coding artists into clusters based on shared similarities
+* The "Missing Artist" Overlay: Toggle the visibility of artists not currently in your library to identify collection gaps suggested by Plex's similarity data.
+* Focus Mode: Selecting an artist centers the camera and highlights their immediate "Similar Artist" neighbors, allowing you to trace the web of influences across your library.
 
 How to use:
 1. Navigate to the Galaxy Explorer tab.
@@ -751,10 +751,10 @@ Note: This tool is computationally taxing and may take a while to complete depen
 The Artist Recommender is a discovery tool designed to help you expand your music collection intelligently. It identifies artists that are frequently related to your current library but are missing from your collection. This tool weights suggestions based on your listening intensity to guide results to better align with your personal taste.
 
 Key Features
-    * Gap Analysis: Scans the "Similar Artist" metadata of every artist in your library and compares it against your existing collection to find the "missing links".
-    * Listening Intensity Weighting: Uses a priority scoring formula that combines the frequency of a recommendation with your total play counts for the referring artists.
-    * Fuzzy Match Filtering: Employs a robust cleaning process (stripping punctuation and normalizing case) to ensure the engine doesn't recommend artists you already own under a slightly different name.
-    * Automated Data Preservation: Every time you generate recommendations, the app automatically saves a timestamped CSV to your Exports/ folder (YYYY_MM_DD Artist_Recommendations.csv) for easy access later.
+* Gap Analysis: Scans the "Similar Artist" metadata of every artist in your library and compares it against your existing collection to find the "missing links".
+* Listening Intensity Weighting: Uses a priority scoring formula that combines the frequency of a recommendation with your total play counts for the referring artists.
+* Fuzzy Match Filtering: Employs a robust cleaning process (stripping punctuation and normalizing case) to ensure the engine doesn't recommend artists you already own under a slightly different name.
+* Automated Data Preservation: Every time you generate recommendations, the app automatically saves a timestamped CSV to your Exports/ folder (YYYY_MM_DD Artist_Recommendations.csv) for easy access later.
 
 How to Use
 1. Navigate to the Artist Recommender tab.
@@ -762,11 +762,11 @@ How to Use
 3. Click Generate Recommendations.
 
 Data Dictionary:
-    * Missing_Artist: The name of an artist identified in Plex's "Similar Artist" metadata who is not currently found in your library.
-    * Related_Library_Artists: A comma-separated list of artists already in your collection that Plex has identified as being similar to the recommended artist.
-    * Recommendation_Count: The total number of unique artists in your library that point to this missing artist as a "similar" peer.
-    * Related_Library_Artists_Total_Play_Count: The aggregate sum of all plays you have logged for the artists in your library that are related to the recommendation.
-    * Priority_Score = Recommendation_Count x log10 (Related_Library_Artists_Total_Play_Count + 1)
+* Missing_Artist: The name of an artist identified in Plex's "Similar Artist" metadata who is not currently found in your library.
+* Related_Library_Artists: A comma-separated list of artists already in your collection that Plex has identified as being similar to the recommended artist.
+* Recommendation_Count: The total number of unique artists in your library that point to this missing artist as a "similar" peer.
+* Related_Library_Artists_Total_Play_Count: The aggregate sum of all plays you have logged for the artists in your library that are related to the recommendation.
+* Priority_Score = Recommendation_Count x log10 (Related_Library_Artists_Total_Play_Count + 1)
 
 ## 11 Safety & Troubleshooting
 * Token Security: Never commit your config.txt to GitHub.
