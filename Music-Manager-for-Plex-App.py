@@ -23,7 +23,7 @@ except ImportError:
 from Scripts import plex_galaxy, artist_recommender  # Import from the subfolder
 
 # --- Version Configuration ---
-CURRENT_VERSION = "v1.2.1"
+CURRENT_VERSION = "v1.2.2"
 REPO_OWNER = "caddickzac"
 REPO_NAME = "Music-Manager-for-Plex"
 
@@ -96,14 +96,14 @@ def expose_internal_files():
 
             dest_path = os.path.join(dest_dir, filename)
             
-            # Only copy if missing to preserve user modifications
-            if not os.path.exists(dest_path):
-                try:
-                    shutil.copy(source_path, dest_path)
-                    os.chmod(dest_path, 0o777)
-                    print(f"Successfully exposed {filename} to {dest_dir}")
-                except Exception as e:
-                    print(f"Error exposing {filename}: {e}")
+            # CHANGED: Removed the 'if not os.path.exists' check.
+            # We now ALWAYS overwrite to ensure the Extras folder matches the latest app version.
+            try:
+                shutil.copy(source_path, dest_path)
+                os.chmod(dest_path, 0o777)
+                print(f"Successfully updated {filename} in {dest_dir}")
+            except Exception as e:
+                print(f"Error updating {filename}: {e}")
 
 # Run setup logic before the UI loads
 expose_internal_files()
