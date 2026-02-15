@@ -30,37 +30,5 @@ ENV/
 .DS_Store
 Thumbs.db
 config.txt
-config.txt
-config.txt
-2025_12_13 plex_music_exported_details \[prior to replacement album downloads\].csv
-2025_12_14 Artist_Album_Info.csv
-2025_12_14 plex_music_exported_details \[after new albums dl\].csv
-config.txt
-Old_DB files/2024_12_04 plex_music_exported_details.csv
-Old_DB files/2025_08_25 plex_music_exported_details.csv
-Old_DB files/2025_10_30 plex_music_exported_details.csv
-Old_DB files/2025_11_29 plex_music_exported_details.csv
-Old_DB files/2025_11_30 plex_music_exported_details.csv
-Old_DB files/2025_12_02 plex_music_exported_details v1.csv
-Old_DB files/2025_12_02 plex_music_exported_details_v2.csv
-Old_DB files/2025_12_03 plex_music_exported_details.csv
-Old_DB files/2025_12_03 plex_music_exported_details_v2.csv
-Old_DB files/2025_12_04 plex_music_exported_details_v1.csv
-Old_DB files/2025_12_05 plex_music_exported_details_v1.csv
-Old_DB files/2025_12_05 plex_music_exported_details_v2.csv
-Old_DB files/2025_12_09 plex_music_exported_details.csv
-Old_DB files/2025_12_10 plex_music_exported_details.csv
-Old_DB files/2025_12_11 plex_music_exported_details.csv
-2025_12_26 Artist_Album_Info.csv
-2025_12_26 Artist_Level_Info.csv
-2025_12_26 plex_music_exported_details.csv
-Add_to_playlist.csv
-config.txt
-config.txt
-*.csv
-config.txt
-*.json
-config.txt
-config.txt
 App Documentation.docx
 Music-Manager-for-Plex-App.bat

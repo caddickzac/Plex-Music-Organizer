@@ -1,0 +1,5 @@
+{
+  "action": "relabel: track genres",
+  "expected_columns": ["Track_ID", "Track_Genres"],
+  "expected_values": ["e.g., 54321", "e.g., Synth-Pop, 80s"]
+}

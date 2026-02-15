@@ -1,0 +1,5 @@
+{
+  "action": "add: tracks to playlist",
+  "expected_columns": ["Track_ID", "Add_to_playlist"],
+  "expected_values": ["123456", "e.g., Classic Rock, Road Trip Mix, Study Vibes"]
+}

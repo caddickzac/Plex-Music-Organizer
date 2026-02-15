@@ -1,0 +1,5 @@
+{
+  "action": "add: artist genre",
+  "expected_columns": ["Track_ID", "Artist_Genres"],
+  "expected_values": ["e.g., 12345", "e.g., Pop"]
+}

@@ -1,0 +1,5 @@
+{
+  "action": "relabel: disc numbers",
+  "expected_columns": ["Track_ID", "Disc #"],
+  "expected_values": ["e.g., 12345", "a single integer, e.g., 2"]
+}

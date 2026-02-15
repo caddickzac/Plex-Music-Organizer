@@ -1,0 +1,5 @@
+{
+  "action": "relabel: album genres",
+  "expected_columns": ["Track_ID", "Album_Genres"],
+  "expected_values": ["e.g., 12345", "e.g., Pop"]
+}

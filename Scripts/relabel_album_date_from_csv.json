@@ -1,0 +1,5 @@
+{
+  "action": "relabel: album date",
+  "expected_columns": ["Track_ID", "Date"],
+  "expected_values": ["12345", "YYYY-MM-DD"]
+}
