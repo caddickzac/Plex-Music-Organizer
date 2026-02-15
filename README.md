@@ -13,7 +13,7 @@ A powerful **Streamlit** application running on Docker, locally on a PC, or Unra
 * **Metadata Comparator:** Compare two export files to see exactly what changed in your library over time.
 * **Docker/Unraid Ready:** Designed to run as a container with environment variables.
 * **Galaxy Explorer:** Visualize your library and Plex's "Similar Artist" connections in an interactive 3D star map to identify relationship clusters.
-* * **Artist Recommender::** Discover missing artists using Plex artist similarity data
+* **Artist Recommender::** Discover missing artists using Plex artist similarity data
 
 
 ## Screenshots of App
